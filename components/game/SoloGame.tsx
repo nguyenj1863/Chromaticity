@@ -23,6 +23,20 @@ export default function SoloGame({ onClose }: SoloGameProps) {
   const animationFrameRef = useRef<number | null>(null);
   const previousYPositionRef = useRef<number | null>(null);
   const velocityRef = useRef<number>(0);
+  // Jump detection refs - track jump cycle (up then down)
+  const jumpPeakYRef = useRef<number | null>(null); // Highest point reached during jump
+  const jumpStateRef = useRef<"none" | "going_up" | "at_peak" | "coming_down">("none");
+  const jumpFramesRef = useRef<number>(0); // Track how long we've been in jump state
+  // Crouch detection refs - track crouch cycle (down then up)
+  const crouchLowestYRef = useRef<number | null>(null); // Lowest point reached during crouch
+  const crouchStateRef = useRef<"none" | "going_down" | "at_bottom" | "coming_up">("none");
+  const crouchFramesRef = useRef<number>(0); // Track how long we've been in crouch state
+  const previousHipYForCrouchRef = useRef<number | null>(null); // Track hip Y for crouch detection
+  // Calibration refs for baseline pose detection
+  const baselineHipShoulderRatioRef = useRef<number | null>(null);
+  const baselineBodyHeightRef = useRef<number | null>(null);
+  const calibrationFramesRef = useRef<number>(0);
+  const isCalibratedRef = useRef<boolean>(false);
   const initRef = useRef(false); // Prevent multiple initializations
   const streamUsedRef = useRef(false); // Track if we've used the existing stream
   const streamRef = useRef<MediaStream | null>(null); // Keep reference to stream
@@ -312,8 +326,24 @@ export default function SoloGame({ onClose }: SoloGameProps) {
   }, []); // Only run once on mount - don't depend on stream or device ID
 
   // Detect pose and determine state
+  // HOW IT WORKS:
+  // 1. CALIBRATION: When player first appears, we establish a baseline "normal standing" pose
+  //    - Collects 30 frames of data to establish baseline hip-shoulder ratio
+  //    - This baseline adapts to the player's natural standing position
+  //    - Works regardless of initial distance from camera
+  //
+  // 2. JUMPING: Detects rapid upward movement relative to baseline
+  //    - Tracks hip position changes over time
+  //    - Uses relative movement (percentage of current body height)
+  //    - Requires significant upward velocity (3% of body height per frame)
+  //
+  // 3. CROUCHING: Compares current pose to calibrated baseline
+  //    - If hip-shoulder ratio is 30%+ more than baseline, it's crouching
+  //    - This adapts to each player's natural proportions
+  //
+  // 4. STANDING: Default state when pose matches baseline (within tolerance)
   const detectPoseState = (poses: poseDetection.Pose[]): PoseState => {
-    if (poses.length === 0) return "unknown";
+    if (poses.length === 0) return "standing";
 
     const pose = poses[0];
     const keypoints = pose.keypoints;
@@ -336,7 +366,7 @@ export default function SoloGame({ onClose }: SoloGameProps) {
 
     // Check if we have enough keypoints
     if (!nose || !leftShoulder || !rightShoulder || !leftHip || !rightHip) {
-      return "unknown";
+      return "standing";
     }
 
     // Calculate average positions
@@ -346,56 +376,225 @@ export default function SoloGame({ onClose }: SoloGameProps) {
 
     // Calculate body height (head to hip)
     const bodyHeight = Math.abs(headY - hipY);
-    if (bodyHeight < 50) return "unknown"; // Too small, likely detection error
+    if (bodyHeight < 30) return "standing"; // Too small, likely detection error
 
-    // Calculate velocity (change in hip position) - negative means moving up
-    const currentHipY = hipY;
+    // Calculate current hip-shoulder ratio
+    const hipShoulderDiff = hipY - shoulderY;
+    const hipShoulderRatio = hipShoulderDiff / bodyHeight;
+
+    // CALIBRATION PHASE: Establish baseline when player first appears
+    if (!isCalibratedRef.current) {
+      calibrationFramesRef.current++;
+      
+      // Collect baseline data over 30 frames (about 1 second at 30fps)
+      if (calibrationFramesRef.current <= 30) {
+        // Accumulate baseline ratio
+        if (baselineHipShoulderRatioRef.current === null) {
+          baselineHipShoulderRatioRef.current = hipShoulderRatio;
+        } else {
+          // Average the ratios for a stable baseline
+          baselineHipShoulderRatioRef.current = 
+            (baselineHipShoulderRatioRef.current * (calibrationFramesRef.current - 1) + hipShoulderRatio) / 
+            calibrationFramesRef.current;
+        }
+        baselineBodyHeightRef.current = bodyHeight;
+        // During calibration, default to standing
+        return "standing";
+      } else {
+        // Calibration complete
+        isCalibratedRef.current = true;
+      }
+    }
+
+    // After calibration, use baseline for detection
+    const baselineRatio = baselineHipShoulderRatioRef.current || 0.35;
+    const baselineBodyHeight = baselineBodyHeightRef.current || bodyHeight;
+    const currentHipY = hipY; // Use for both crouch and jump detection
+
+    // CROUCHING DETECTION: Track complete crouch cycle (down then up)
+    // Player must be standing first, then go down (crouch), then come back up (stand)
+    const previousHipYForCrouch = previousHipYForCrouchRef.current;
+    
+    // Check if player is in a crouch position (for state machine, not final detection)
+    const ratioIncrease = (hipShoulderRatio - baselineRatio) / baselineRatio;
+    const hipsLower = ratioIncrease > 0.25; // Hips are lower than baseline (lowered threshold for earlier detection)
+    const bodyCompression = (baselineBodyHeight - bodyHeight) / baselineBodyHeight;
+    const bodyCompressed = bodyCompression > 0.1; // Body is compressed (lowered threshold)
+    
+    // Check if knees are bent
+    let legsBent = false;
+    if (leftKnee && rightKnee && leftHip && rightHip && leftAnkle && rightAnkle) {
+      const kneeY = (leftKnee.y + rightKnee.y) / 2;
+      const ankleY = (leftAnkle.y + rightAnkle.y) / 2;
+      const hipY = (leftHip.y + rightHip.y) / 2;
+      const kneeToHip = Math.abs(kneeY - hipY);
+      const kneeToAnkle = Math.abs(kneeY - ankleY);
+      const kneeBetweenHipAndAnkle = (kneeY > Math.min(hipY, ankleY) && kneeY < Math.max(hipY, ankleY));
+      legsBent = kneeToAnkle < kneeToHip * 0.85 && kneeBetweenHipAndAnkle; // Slightly more lenient
+    }
+    
+    const inCrouchPosition = hipsLower && (bodyCompressed || legsBent);
+    
+    // CRITICAL: If player is in crouch position, immediately block jump detection
+    // This prevents crouching from being mistaken as jumping
+    if (inCrouchPosition && jumpStateRef.current === "none") {
+      // Player is in crouch position but crouch state machine hasn't started yet
+      // Reset any jump state and prevent jump detection
+      jumpStateRef.current = "none";
+      jumpPeakYRef.current = null;
+      jumpFramesRef.current = 0;
+    }
+    
+    // Crouch state machine - only works if starting from standing
+    if (previousHipYForCrouch !== null) {
+      const deltaY = currentHipY - previousHipYForCrouch;
+      const deltaYPercent = (deltaY / bodyHeight) * 100;
+      
+      if (crouchStateRef.current === "none") {
+        // Not crouching - check if starting to crouch (downward movement + crouch position)
+        // Must be in crouch position AND moving down significantly
+        // Lowered thresholds to catch crouch earlier
+        if (inCrouchPosition && deltaYPercent > 1.5 && currentHipY > previousHipYForCrouch + (bodyHeight * 0.015)) {
+          crouchStateRef.current = "going_down";
+          crouchLowestYRef.current = currentHipY;
+          crouchFramesRef.current = 0;
+          // Immediately reset jump state when crouch starts
+          jumpStateRef.current = "none";
+          jumpPeakYRef.current = null;
+          jumpFramesRef.current = 0;
+        }
+      } else if (crouchStateRef.current === "going_down") {
+        crouchFramesRef.current++;
+        
+        // Currently going down into crouch
+        if (currentHipY > crouchLowestYRef.current!) {
+          // Still going down, update lowest point
+          crouchLowestYRef.current = currentHipY;
+          crouchFramesRef.current = 0; // Reset counter when still descending
+          // Return crouching while going down
+          return "crouching";
+        } else if (currentHipY <= crouchLowestYRef.current! - (bodyHeight * 0.015)) {
+          // Started coming up (at least 1.5% of body height up from lowest point)
+          crouchStateRef.current = "coming_up";
+          crouchFramesRef.current = 0;
+          // Still crouching while coming up
+          return "crouching";
+        } else {
+          // At bottom or stopped descending
+          if (crouchFramesRef.current > 20) {
+            // Been at bottom too long without coming up - reset (false positive or just standing low)
+            crouchStateRef.current = "none";
+            crouchLowestYRef.current = null;
+            crouchFramesRef.current = 0;
+          } else {
+            // Still at bottom, might be real crouch - return crouching
+            return "crouching";
+          }
+        }
+      } else if (crouchStateRef.current === "coming_up") {
+        // Coming up after crouch - this confirms it was a real crouch
+        if (currentHipY <= previousHipYForCrouch - (bodyHeight * 0.01)) {
+          // Still going up
+          return "crouching";
+        } else {
+          // Back to standing - reset crouch state
+          crouchStateRef.current = "none";
+          crouchLowestYRef.current = null;
+          crouchFramesRef.current = 0;
+        }
+      }
+    }
+    
+    previousHipYForCrouchRef.current = currentHipY;
+    
+    // If in crouch state, reset jump and return crouching
+    if (crouchStateRef.current !== "none") {
+      // Reset jump detection when crouching
+      if (jumpStateRef.current !== "none") {
+        jumpStateRef.current = "none";
+        jumpPeakYRef.current = null;
+        jumpFramesRef.current = 0;
+      }
+      return "crouching";
+    }
+
+    // JUMPING DETECTION: Track complete jump cycle (up then down)
+    // Only check if NOT crouching (mutually exclusive)
+    // CRITICAL: Don't detect jumps if player is in crouch position
     const previousHipY = previousYPositionRef.current;
     
-    if (previousHipY !== null) {
+    if (previousHipY !== null && !inCrouchPosition) {
       const deltaY = currentHipY - previousHipY;
-      // Smooth velocity with exponential moving average
-      velocityRef.current = deltaY * 0.8 + velocityRef.current * 0.2;
+      // Convert to percentage of current body height (works at any distance)
+      const deltaYPercent = (deltaY / bodyHeight) * 100;
       
-      // Check for jumping: hip moving up rapidly (negative velocity)
-      // Threshold: -3 pixels per frame indicates upward movement
-      if (velocityRef.current < -3 && currentHipY < previousHipY) {
-        return "jumping";
+      // Smooth velocity with exponential moving average
+      velocityRef.current = deltaYPercent * 0.3 + velocityRef.current * 0.7;
+      
+      // Jump state machine
+      if (jumpStateRef.current === "none") {
+        // Not jumping - check if starting to jump (significant upward movement)
+        // Require stronger signal to avoid false positives from movement
+        // ADDITIONAL CHECK: Make sure we're not in a crouch position
+        if (velocityRef.current < -4 && currentHipY < previousHipY - (bodyHeight * 0.03) && !inCrouchPosition) {
+          // Additional check: make sure we're not just moving backward
+          // If body height is also increasing (player moving away), it's likely movement, not jump
+          const bodyHeightChange = bodyHeight - baselineBodyHeight;
+          const bodyHeightIncrease = bodyHeightChange / baselineBodyHeight;
+          
+          // Only start jump if body isn't significantly larger (not moving away)
+          if (bodyHeightIncrease < 0.1) {
+            jumpStateRef.current = "going_up";
+            jumpPeakYRef.current = currentHipY;
+            jumpFramesRef.current = 0;
+          }
+        }
+      } else if (jumpStateRef.current === "going_up") {
+        jumpFramesRef.current++;
+        
+        // Currently going up - track the peak
+        if (currentHipY < jumpPeakYRef.current!) {
+          // Still going up, update peak
+          jumpPeakYRef.current = currentHipY;
+          jumpFramesRef.current = 0; // Reset counter when still ascending
+          return "jumping";
+        } else if (currentHipY >= jumpPeakYRef.current! + (bodyHeight * 0.015)) {
+          // Started coming down (at least 1.5% of body height down from peak)
+          jumpStateRef.current = "coming_down";
+          jumpFramesRef.current = 0;
+          return "jumping";
+        } else {
+          // At peak or stopped ascending
+          // If we've been at peak for more than 20 frames (~0.67 seconds) without descending,
+          // it's likely a false positive (player moved backward and stopped)
+          if (jumpFramesRef.current > 20) {
+            // False positive - reset
+            jumpStateRef.current = "none";
+            jumpPeakYRef.current = null;
+            jumpFramesRef.current = 0;
+          } else {
+            // Still might be a real jump at peak - return jumping
+            return "jumping";
+          }
+        }
+      } else if (jumpStateRef.current === "coming_down") {
+        // Coming down after peak - this confirms it was a real jump
+        if (currentHipY >= previousHipY + (bodyHeight * 0.01)) {
+          // Still going down
+          return "jumping";
+        } else {
+          // Landed or stopped descending - reset jump state
+          jumpStateRef.current = "none";
+          jumpPeakYRef.current = null;
+          jumpFramesRef.current = 0;
+        }
       }
     }
     
     previousYPositionRef.current = currentHipY;
 
-    // Check for crouching: hips lower relative to shoulders, knees bent
-    if (leftKnee && rightKnee) {
-      const kneeY = (leftKnee.y + rightKnee.y) / 2;
-      
-      // Calculate if legs are bent (knees closer to hips than ankles)
-      let legsBent = false;
-      if (leftAnkle && rightAnkle) {
-        const ankleY = (leftAnkle.y + rightAnkle.y) / 2;
-        const kneeToHip = Math.abs(kneeY - hipY);
-        const kneeToAnkle = Math.abs(kneeY - ankleY);
-        // Legs are bent if knee-to-ankle distance is significantly less than knee-to-hip
-        legsBent = kneeToAnkle < kneeToHip * 0.7;
-      }
-
-      // Crouching: hips significantly lower than shoulders, and legs bent
-      const hipShoulderDiff = hipY - shoulderY;
-      const normalHipShoulderRatio = 0.35; // Normal: hips are ~35% of body height below shoulders
-      const crouchThreshold = bodyHeight * normalHipShoulderRatio * 1.4; // 40% more than normal
-
-      if (hipShoulderDiff > crouchThreshold && legsBent) {
-        return "crouching";
-      }
-    }
-
-    // Default to standing (hips at normal position, not jumping)
-    if (velocityRef.current > -2) {
-      return "standing";
-    }
-
-    return "unknown";
+    // Default to standing if not jumping or crouching
+    return "standing";
   };
 
   // Main pose detection loop
@@ -424,12 +623,12 @@ export default function SoloGame({ onClose }: SoloGameProps) {
       }
       
       if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        // Set canvas size to match video
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-
-        // Draw video frame to canvas
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        // Set canvas internal size to match video's native dimensions
+        // This ensures keypoint coordinates align correctly
+        if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+        }
 
         // Detect poses
         const poses = await detectPose(video);
@@ -438,15 +637,86 @@ export default function SoloGame({ onClose }: SoloGameProps) {
         const state = detectPoseState(poses);
         setPoseState(state);
 
-        // Draw pose keypoints (optional - for debugging)
+        // Draw pose skeleton and keypoints
         if (poses.length > 0) {
           const pose = poses[0];
-          pose.keypoints.forEach((keypoint) => {
-            if (keypoint.score && keypoint.score > 0.3) {
+          const keypoints = pose.keypoints;
+          
+          // Helper to get keypoint by name
+          const getKeypoint = (name: string) => {
+            return keypoints.find((kp) => kp.name === name);
+          };
+          
+          // Helper to check if keypoint is valid
+          const isValid = (kp: poseDetection.Keypoint | undefined) => {
+            return kp && kp.score && kp.score > 0.3;
+          };
+          
+          // Define skeleton connections (MoveNet 17 keypoints)
+          const connections = [
+            // Head
+            ["nose", "left_eye"],
+            ["nose", "right_eye"],
+            ["left_eye", "left_ear"],
+            ["right_eye", "right_ear"],
+            // Torso
+            ["left_shoulder", "right_shoulder"],
+            ["left_shoulder", "left_hip"],
+            ["right_shoulder", "right_hip"],
+            ["left_hip", "right_hip"],
+            // Left arm
+            ["left_shoulder", "left_elbow"],
+            ["left_elbow", "left_wrist"],
+            // Right arm
+            ["right_shoulder", "right_elbow"],
+            ["right_elbow", "right_wrist"],
+            // Left leg
+            ["left_hip", "left_knee"],
+            ["left_knee", "left_ankle"],
+            // Right leg
+            ["right_hip", "right_knee"],
+            ["right_knee", "right_ankle"],
+          ] as const;
+          
+          // Clear canvas first (don't draw video, just overlay)
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          
+          // Draw skeleton lines
+          ctx.strokeStyle = "#00ff00";
+          ctx.lineWidth = 2;
+          connections.forEach(([startName, endName]) => {
+            const start = getKeypoint(startName);
+            const end = getKeypoint(endName);
+            
+            if (isValid(start) && isValid(end)) {
+              ctx.beginPath();
+              ctx.moveTo(start!.x, start!.y);
+              ctx.lineTo(end!.x, end!.y);
+              ctx.stroke();
+            }
+          });
+          
+          // Draw keypoints
+          keypoints.forEach((keypoint) => {
+            if (isValid(keypoint)) {
+              // Draw outer circle (glow effect)
+              ctx.beginPath();
+              ctx.arc(keypoint.x, keypoint.y, 8, 0, 2 * Math.PI);
+              ctx.fillStyle = "rgba(0, 255, 0, 0.3)";
+              ctx.fill();
+              
+              // Draw inner circle
               ctx.beginPath();
               ctx.arc(keypoint.x, keypoint.y, 5, 0, 2 * Math.PI);
               ctx.fillStyle = "#00ff00";
               ctx.fill();
+              
+              // Draw border
+              ctx.beginPath();
+              ctx.arc(keypoint.x, keypoint.y, 5, 0, 2 * Math.PI);
+              ctx.strokeStyle = "#ffffff";
+              ctx.lineWidth = 1;
+              ctx.stroke();
             }
           });
         }
@@ -606,7 +876,7 @@ export default function SoloGame({ onClose }: SoloGameProps) {
         <div className="relative w-full h-full">
           <video
             ref={videoRef}
-            className="w-full h-full object-cover"
+            className="w-full h-full object-contain"
             playsInline
             muted
             autoPlay
@@ -614,6 +884,7 @@ export default function SoloGame({ onClose }: SoloGameProps) {
           <canvas
             ref={canvasRef}
             className="absolute top-0 left-0 w-full h-full pointer-events-none"
+            style={{ objectFit: 'contain', zIndex: 10 }}
           />
           
           {/* Pose state indicator */}
