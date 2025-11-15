@@ -13,8 +13,12 @@ export interface PlayerData {
 interface AppState {
   player1: PlayerData;
   player2: PlayerData;
+  selectedCameraDeviceId: string | null;
+  cameraStream: MediaStream | null;
   setPlayer1Data: (data: Partial<PlayerData>) => void;
   setPlayer2Data: (data: Partial<PlayerData>) => void;
+  setSelectedCameraDeviceId: (deviceId: string | null) => void;
+  setCameraStream: (stream: MediaStream | null) => void;
   calculateBMI: (player: 1 | 2) => number | null;
 }
 
@@ -77,6 +81,10 @@ export const useStore = create<AppState>()(
         bmi: null,
         bmr: null,
       },
+      selectedCameraDeviceId: null,
+      cameraStream: null,
+      setSelectedCameraDeviceId: (deviceId) => set({ selectedCameraDeviceId: deviceId }),
+      setCameraStream: (stream) => set({ cameraStream: stream }),
       setPlayer1Data: (data) => {
         const player1 = { ...get().player1, ...data };
         const bmi = calculateBMI(player1.height, player1.weight);
@@ -96,6 +104,13 @@ export const useStore = create<AppState>()(
     }),
     {
       name: 'chromacity-storage',
+      partialize: (state) => ({
+        // Only persist player data and device ID, not the camera stream
+        player1: state.player1,
+        player2: state.player2,
+        selectedCameraDeviceId: state.selectedCameraDeviceId,
+        // cameraStream is not persisted (not serializable)
+      }),
     }
   )
 );

@@ -1,11 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import BackgroundEffects from "@/components/home/BackgroundEffects";
 import TitleSection from "@/components/home/TitleSection";
 import MenuButtons from "@/components/home/MenuButtons";
 import SettingsButton from "@/components/home/SettingsButton";
+import SoloGame from "@/components/game/SoloGame";
 
 export default function Home() {
+  const [showGame, setShowGame] = useState(false);
   const title = "CHROMATICITY";
   const colors = [
     "#FF6B6B", // Red
@@ -20,6 +23,11 @@ export default function Home() {
     "#52BE80", // Green
   ];
 
+  // If game is showing, render game component
+  if (showGame) {
+    return <SoloGame onClose={() => setShowGame(false)} />;
+  }
+
   return (
     <main className="min-h-screen bg-grey-world relative overflow-hidden">
       {/* Dark overlay background - same as modal */}
@@ -33,7 +41,7 @@ export default function Home() {
       {/* Content */}
       <div className="relative z-20 flex flex-col items-center min-h-screen">
         <TitleSection title={title} colors={colors} />
-        <MenuButtons />
+        <MenuButtons onGameStart={() => setShowGame(true)} />
         <SettingsButton />
         
         {/* Made with love text */}

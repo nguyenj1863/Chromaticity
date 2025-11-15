@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useStore } from "@/app/store/useStore";
 import CameraSelectionModal from "./CameraSelectionModal";
 import ControllerSelectionModal from "./ControllerSelectionModal";
 import GoalModal from "./GoalModal";
@@ -53,8 +54,10 @@ export default function HowToPlayModal({
   onConnectController,
   onConnectCamera,
 }: HowToPlayModalProps) {
+  const { setSelectedCameraDeviceId, setCameraStream: setGlobalCameraStream } = useStore();
   const [cameraStatus, setCameraStatus] = useState<'idle' | 'checking' | 'connected' | 'notFound'>('idle');
   const [selectedCamera, setSelectedCamera] = useState<CameraDevice | null>(null);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const [showCameraSelection, setShowCameraSelection] = useState(false);
   const [controllerStatus, setControllerStatus] = useState<'idle' | 'checking' | 'connected' | 'notFound'>('idle');
   const [selectedController, setSelectedController] = useState<ControllerDevice | null>(null);
@@ -79,16 +82,27 @@ export default function HowToPlayModal({
     setCameraStatus('checking');
     
     try {
-      // Try to access the selected camera
+      // Stop previous stream if exists
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+      }
+      
+      // Access the selected camera and keep the stream active
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { deviceId: { exact: camera.deviceId } } 
       });
-      stream.getTracks().forEach(track => track.stop()); // Stop the stream immediately
+      
+      // Store the stream to keep it active
+      setCameraStream(stream);
+      // Store the device ID and stream in global store so game can use it
+      setSelectedCameraDeviceId(camera.deviceId);
+      setGlobalCameraStream(stream); // Store stream globally for game to use
       setCameraStatus('connected');
     } catch (error) {
       console.error('Error connecting to camera:', error);
       setCameraStatus('notFound');
       setSelectedCamera(null);
+      setCameraStream(null);
     }
   };
 
@@ -136,35 +150,51 @@ export default function HowToPlayModal({
     }
   };
 
-  // Reset camera and controller status when modal closes
+  // Reset camera and controller status when modal closes (only if not continuing)
   useEffect(() => {
+    // Only run cleanup if modal is actually closed AND we're not continuing
+    // Use a small delay to ensure continueClicked state has updated
     if (!isOpen) {
-      // Disconnect camera (stop video stream if any)
-      setCameraStatus('idle');
-      setSelectedCamera(null);
-      
-      // Disconnect controller (disconnect Bluetooth) - unless continue was clicked
-      if (controllerConnection && !continueClicked) {
-        try {
-          if (controllerConnection.server.connected) {
-            controllerConnection.device.gatt?.disconnect();
-          }
-        } catch (error) {
-          console.error('Error disconnecting controller:', error);
+      const timeoutId = setTimeout(() => {
+        if (!continueClicked && cameraStream) {
+          // Disconnect camera (stop video stream if any) - only if not continuing
+          cameraStream.getTracks().forEach(track => {
+            track.stop();
+          });
+          setCameraStream(null);
+          // Also clear from global store if we're stopping it
+          setGlobalCameraStream(null);
         }
-        setControllerConnection(null);
-      }
+        setCameraStatus('idle');
+        setSelectedCamera(null);
+        
+        // Disconnect controller (disconnect Bluetooth) - unless continue was clicked
+        if (controllerConnection && !continueClicked) {
+          try {
+            if (controllerConnection.server.connected) {
+              controllerConnection.device.gatt?.disconnect();
+            }
+          } catch (error) {
+            console.error('Error disconnecting controller:', error);
+          }
+          setControllerConnection(null);
+        }
+        
+        // Reset states
+        if (!continueClicked) {
+          setControllerStatus('idle');
+          setSelectedController(null);
+        }
+        
+        // Reset continue flag for next time (after a delay to ensure game has started)
+        if (!continueClicked) {
+          setContinueClicked(false);
+        }
+      }, 100); // Small delay to ensure continueClicked state has updated
       
-      // Reset states
-      if (!continueClicked) {
-        setControllerStatus('idle');
-        setSelectedController(null);
-      }
-      
-      // Reset continue flag for next time
-      setContinueClicked(false);
+      return () => clearTimeout(timeoutId);
     }
-  }, [isOpen, controllerConnection, continueClicked]);
+  }, [isOpen, controllerConnection, continueClicked, cameraStream, setGlobalCameraStream]);
 
   useEffect(() => {
     const handleEsc = (event: KeyboardEvent) => {
@@ -479,7 +509,14 @@ export default function HowToPlayModal({
         }}
         onContinue={() => {
           setShowGoalModal(false);
-          onConnectController(); // Navigate to /solo
+          // Set continueClicked BEFORE closing to prevent cleanup from stopping stream
+          setContinueClicked(true);
+          // Don't stop the stream - pass it to the game instead
+          // The stream is already stored in global store via setGlobalCameraStream
+          // Small delay to ensure continueClicked is set before modal might close
+          setTimeout(() => {
+            onConnectController(); // Start the game (stream is already in global store)
+          }, 50);
         }}
       />
     </>
