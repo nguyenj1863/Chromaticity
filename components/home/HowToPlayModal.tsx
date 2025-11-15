@@ -2,11 +2,41 @@
 
 import { useEffect, useState } from "react";
 import CameraSelectionModal from "./CameraSelectionModal";
+import ControllerSelectionModal from "./ControllerSelectionModal";
+
+// Type declarations for Web Bluetooth API
+interface Bluetooth {
+  requestDevice(options: { filters: Array<{ services: string[] }>; optionalServices?: string[] }): Promise<BluetoothDevice>;
+}
+
+interface BluetoothDevice {
+  id: string;
+  name?: string;
+  gatt?: BluetoothRemoteGATTServer;
+}
+
+interface BluetoothRemoteGATTServer {
+  connected: boolean;
+  connect(): Promise<BluetoothRemoteGATTServer>;
+  disconnect(): void;
+}
+
+declare global {
+  interface Navigator {
+    bluetooth?: Bluetooth;
+  }
+}
 
 interface CameraDevice {
   deviceId: string;
   label: string;
   kind: string;
+}
+
+interface ControllerDevice {
+  id: string;
+  name: string;
+  device?: BluetoothDevice;
 }
 
 interface HowToPlayModalProps {
@@ -25,11 +55,21 @@ export default function HowToPlayModal({
   const [cameraStatus, setCameraStatus] = useState<'idle' | 'checking' | 'connected' | 'notFound'>('idle');
   const [selectedCamera, setSelectedCamera] = useState<CameraDevice | null>(null);
   const [showCameraSelection, setShowCameraSelection] = useState(false);
+  const [controllerStatus, setControllerStatus] = useState<'idle' | 'checking' | 'connected' | 'notFound'>('idle');
+  const [selectedController, setSelectedController] = useState<ControllerDevice | null>(null);
+  const [showControllerSelection, setShowControllerSelection] = useState(false);
+  const [controllerConnection, setControllerConnection] = useState<{ device: BluetoothDevice; server: BluetoothRemoteGATTServer } | null>(null);
   const [selectedSection, setSelectedSection] = useState<'gameplay' | 'camera' | 'controller' | 'inventory'>('gameplay');
+  const [continueClicked, setContinueClicked] = useState(false);
 
   const handleConnectCamera = () => {
     // Always show camera selection when button is clicked
     setShowCameraSelection(true);
+  };
+
+  const handleConnectController = () => {
+    // Always show controller selection when button is clicked
+    setShowControllerSelection(true);
   };
 
   const handleCameraSelected = async (camera: CameraDevice) => {
@@ -50,13 +90,79 @@ export default function HowToPlayModal({
     }
   };
 
-  // Reset camera status when modal closes
+  const handleControllerSelected = async (controller: ControllerDevice) => {
+    setSelectedController(controller);
+    setControllerStatus('checking');
+    
+    try {
+      const SERVICE_UUID = "12345678-1234-1234-1234-1234567890ab";
+      const CHAR_TX_UUID = "12345678-1234-1234-1234-1234567890ac";
+      const CHAR_RX_UUID = "12345678-1234-1234-1234-1234567890ad";
+
+      if (!navigator.bluetooth) {
+        throw new Error("Web Bluetooth not supported");
+      }
+
+      // Use the stored device if available, otherwise request it again
+      let device = controller.device;
+      
+      if (!device) {
+        // Fallback: request device again if not stored (shouldn't happen normally)
+        device = await navigator.bluetooth.requestDevice({
+          filters: [{ services: [SERVICE_UUID] }],
+          optionalServices: [SERVICE_UUID],
+        });
+      }
+
+      if (device && device.id === controller.id) {
+        const server = await device.gatt?.connect();
+        if (server) {
+          // Connection successful
+          setControllerStatus('connected');
+          // Store connection for later use
+          setControllerConnection({ device, server });
+        } else {
+          throw new Error("Failed to connect to GATT server");
+        }
+      } else {
+        throw new Error("Controller mismatch");
+      }
+    } catch (error: any) {
+      console.error('Error connecting to controller:', error);
+      setControllerStatus('notFound');
+      setSelectedController(null);
+    }
+  };
+
+  // Reset camera and controller status when modal closes
   useEffect(() => {
     if (!isOpen) {
+      // Disconnect camera (stop video stream if any)
       setCameraStatus('idle');
       setSelectedCamera(null);
+      
+      // Disconnect controller (disconnect Bluetooth) - unless continue was clicked
+      if (controllerConnection && !continueClicked) {
+        try {
+          if (controllerConnection.server.connected) {
+            controllerConnection.device.gatt?.disconnect();
+          }
+        } catch (error) {
+          console.error('Error disconnecting controller:', error);
+        }
+        setControllerConnection(null);
+      }
+      
+      // Reset states
+      if (!continueClicked) {
+        setControllerStatus('idle');
+        setSelectedController(null);
+      }
+      
+      // Reset continue flag for next time
+      setContinueClicked(false);
     }
-  }, [isOpen]);
+  }, [isOpen, controllerConnection, continueClicked]);
 
   useEffect(() => {
     const handleEsc = (event: KeyboardEvent) => {
@@ -263,10 +369,17 @@ export default function HowToPlayModal({
           {/* Connect buttons */}
           <div className="flex flex-col sm:flex-row justify-center gap-4">
             <button
-              onClick={onConnectController}
+              onClick={handleConnectController}
               className="pixel-button-glass"
+              disabled={controllerStatus === 'checking'}
             >
-              CONNECT CONTROLLER
+              {controllerStatus === 'checking' 
+                ? "CHECKING..." 
+                : controllerStatus === 'connected'
+                ? "SELECT CONTROLLER"
+                : controllerStatus === 'notFound'
+                ? "TRY AGAIN"
+                : "CONNECT CONTROLLER"}
             </button>
             <button
               onClick={handleConnectCamera}
@@ -283,22 +396,56 @@ export default function HowToPlayModal({
             </button>
           </div>
           
-          {/* Camera status message */}
-          {cameraStatus === 'connected' && selectedCamera && (
-            <p 
-              className="text-center text-green-400 text-xs mt-2 opacity-80"
-              style={{ fontFamily: "'Press Start 2P', monospace" }}
-            >
-              CONNECTED: {selectedCamera.label}
-            </p>
-          )}
-          {cameraStatus === 'notFound' && (
-            <p 
-              className="text-center text-red-400 text-xs mt-2 opacity-80"
-              style={{ fontFamily: "'Press Start 2P', monospace" }}
-            >
-              CAMERA NOT FOUND - CLICK TO TRY AGAIN
-            </p>
+          {/* Status messages */}
+          <div className="mt-2 space-y-1">
+            {controllerStatus === 'connected' && selectedController && (
+              <p 
+                className="text-center text-green-400 text-xs opacity-80"
+                style={{ fontFamily: "'Press Start 2P', monospace" }}
+              >
+                CONTROLLER: {selectedController.name}
+              </p>
+            )}
+            {controllerStatus === 'notFound' && (
+              <p 
+                className="text-center text-red-400 text-xs opacity-80"
+                style={{ fontFamily: "'Press Start 2P', monospace" }}
+              >
+                CONTROLLER NOT FOUND - CLICK TO TRY AGAIN
+              </p>
+            )}
+            {cameraStatus === 'connected' && selectedCamera && (
+              <p 
+                className="text-center text-green-400 text-xs opacity-80"
+                style={{ fontFamily: "'Press Start 2P', monospace" }}
+              >
+                CAMERA: {selectedCamera.label}
+              </p>
+            )}
+            {cameraStatus === 'notFound' && (
+              <p 
+                className="text-center text-red-400 text-xs opacity-80"
+                style={{ fontFamily: "'Press Start 2P', monospace" }}
+              >
+                CAMERA NOT FOUND - CLICK TO TRY AGAIN
+              </p>
+            )}
+          </div>
+
+          {/* Continue button - show when camera is connected (controller optional for now) */}
+          {cameraStatus === 'connected' && (
+            <div className="mt-6 flex justify-center">
+              <button
+                onClick={() => {
+                  setContinueClicked(true); // Mark that continue was clicked
+                  onClose();
+                  onConnectController(); // This will navigate to /solo
+                }}
+                className="pixel-button-glass text-lg"
+              >
+                CONTINUE
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -308,6 +455,13 @@ export default function HowToPlayModal({
         isOpen={showCameraSelection}
         onClose={() => setShowCameraSelection(false)}
         onSelectCamera={handleCameraSelected}
+      />
+
+      {/* Controller Selection Modal */}
+      <ControllerSelectionModal
+        isOpen={showControllerSelection}
+        onClose={() => setShowControllerSelection(false)}
+        onSelectController={handleControllerSelected}
       />
     </div>
   );
