@@ -3,10 +3,10 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useStore } from "@/app/store/useStore";
-import TrackHealthModal from "./TrackHealthModal";
-import BMISettingsModal from "./BMISettingsModal";
-import PlayerSelectionModal from "./PlayerSelectionModal";
-import HowToPlayModal from "./HowToPlayModal";
+import TrackHealthModal from "@/components/modals/TrackHealthModal";
+import BMISettingsModal from "@/components/modals/BMISettingsModal";
+import PlayerSelectionModal from "@/components/modals/PlayerSelectionModal";
+import HowToPlayModal from "@/components/modals/HowToPlayModal";
 
 interface MenuButtonProps {
   label: string;

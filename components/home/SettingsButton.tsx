@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import BMISettingsModal from "./BMISettingsModal";
+import BMISettingsModal from "@/components/modals/BMISettingsModal";
 
 export default function SettingsButton() {
   const [isModalOpen, setIsModalOpen] = useState(false);

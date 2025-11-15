@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import ColorCrystal3D from "./ColorCrystal3D";
+import ColorCrystal3D from "@/components/ui/ColorCrystal3D";
 
 interface GoalModalProps {
   isOpen: boolean;
