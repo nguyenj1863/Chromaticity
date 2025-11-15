@@ -285,7 +285,7 @@ export default function HowToPlayModal({
                     >
                       <span className="text-cyan-400">CAMERA:</span>
                       <br />
-                      <span className="opacity-90">Detects physical movement: jumping, crouching, standing, and arm motion.</span>
+                      <span className="opacity-90">Detects physical movement: jumping, standing, and arm motion.</span>
                     </button>
                     <button
                       onClick={() => setSelectedSection('controller')}

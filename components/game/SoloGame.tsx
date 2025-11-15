@@ -5,7 +5,7 @@ import { useStore } from "@/app/store/useStore";
 import { detectPose, initializeMoveNet } from "@/lib/tensorflow";
 import * as poseDetection from "@tensorflow-models/pose-detection";
 
-type PoseState = "standing" | "jumping" | "crouching" | "unknown";
+type PoseState = "standing" | "jumping" | "unknown";
 
 interface SoloGameProps {
   onClose?: () => void;
@@ -27,11 +27,6 @@ export default function SoloGame({ onClose }: SoloGameProps) {
   const jumpPeakYRef = useRef<number | null>(null); // Highest point reached during jump
   const jumpStateRef = useRef<"none" | "going_up" | "at_peak" | "coming_down">("none");
   const jumpFramesRef = useRef<number>(0); // Track how long we've been in jump state
-  // Crouch detection refs - track crouch cycle (down then up)
-  const crouchLowestYRef = useRef<number | null>(null); // Lowest point reached during crouch
-  const crouchStateRef = useRef<"none" | "going_down" | "at_bottom" | "coming_up">("none");
-  const crouchFramesRef = useRef<number>(0); // Track how long we've been in crouch state
-  const previousHipYForCrouchRef = useRef<number | null>(null); // Track hip Y for crouch detection
   // Calibration refs for baseline pose detection
   const baselineHipShoulderRatioRef = useRef<number | null>(null);
   const baselineBodyHeightRef = useRef<number | null>(null);
@@ -335,13 +330,10 @@ export default function SoloGame({ onClose }: SoloGameProps) {
   // 2. JUMPING: Detects rapid upward movement relative to baseline
   //    - Tracks hip position changes over time
   //    - Uses relative movement (percentage of current body height)
-  //    - Requires significant upward velocity (3% of body height per frame)
+  //    - Requires significant upward velocity (4% of body height per frame)
+  //    - Must complete full cycle: up then down
   //
-  // 3. CROUCHING: Compares current pose to calibrated baseline
-  //    - If hip-shoulder ratio is 30%+ more than baseline, it's crouching
-  //    - This adapts to each player's natural proportions
-  //
-  // 4. STANDING: Default state when pose matches baseline (within tolerance)
+  // 3. STANDING: Default state when pose matches baseline (within tolerance)
   const detectPoseState = (poses: poseDetection.Pose[]): PoseState => {
     if (poses.length === 0) return "standing";
 
@@ -409,121 +401,12 @@ export default function SoloGame({ onClose }: SoloGameProps) {
     // After calibration, use baseline for detection
     const baselineRatio = baselineHipShoulderRatioRef.current || 0.35;
     const baselineBodyHeight = baselineBodyHeightRef.current || bodyHeight;
-    const currentHipY = hipY; // Use for both crouch and jump detection
-
-    // CROUCHING DETECTION: Track complete crouch cycle (down then up)
-    // Player must be standing first, then go down (crouch), then come back up (stand)
-    const previousHipYForCrouch = previousHipYForCrouchRef.current;
-    
-    // Check if player is in a crouch position (for state machine, not final detection)
-    const ratioIncrease = (hipShoulderRatio - baselineRatio) / baselineRatio;
-    const hipsLower = ratioIncrease > 0.25; // Hips are lower than baseline (lowered threshold for earlier detection)
-    const bodyCompression = (baselineBodyHeight - bodyHeight) / baselineBodyHeight;
-    const bodyCompressed = bodyCompression > 0.1; // Body is compressed (lowered threshold)
-    
-    // Check if knees are bent
-    let legsBent = false;
-    if (leftKnee && rightKnee && leftHip && rightHip && leftAnkle && rightAnkle) {
-      const kneeY = (leftKnee.y + rightKnee.y) / 2;
-      const ankleY = (leftAnkle.y + rightAnkle.y) / 2;
-      const hipY = (leftHip.y + rightHip.y) / 2;
-      const kneeToHip = Math.abs(kneeY - hipY);
-      const kneeToAnkle = Math.abs(kneeY - ankleY);
-      const kneeBetweenHipAndAnkle = (kneeY > Math.min(hipY, ankleY) && kneeY < Math.max(hipY, ankleY));
-      legsBent = kneeToAnkle < kneeToHip * 0.85 && kneeBetweenHipAndAnkle; // Slightly more lenient
-    }
-    
-    const inCrouchPosition = hipsLower && (bodyCompressed || legsBent);
-    
-    // CRITICAL: If player is in crouch position, immediately block jump detection
-    // This prevents crouching from being mistaken as jumping
-    if (inCrouchPosition && jumpStateRef.current === "none") {
-      // Player is in crouch position but crouch state machine hasn't started yet
-      // Reset any jump state and prevent jump detection
-      jumpStateRef.current = "none";
-      jumpPeakYRef.current = null;
-      jumpFramesRef.current = 0;
-    }
-    
-    // Crouch state machine - only works if starting from standing
-    if (previousHipYForCrouch !== null) {
-      const deltaY = currentHipY - previousHipYForCrouch;
-      const deltaYPercent = (deltaY / bodyHeight) * 100;
-      
-      if (crouchStateRef.current === "none") {
-        // Not crouching - check if starting to crouch (downward movement + crouch position)
-        // Must be in crouch position AND moving down significantly
-        // Lowered thresholds to catch crouch earlier
-        if (inCrouchPosition && deltaYPercent > 1.5 && currentHipY > previousHipYForCrouch + (bodyHeight * 0.015)) {
-          crouchStateRef.current = "going_down";
-          crouchLowestYRef.current = currentHipY;
-          crouchFramesRef.current = 0;
-          // Immediately reset jump state when crouch starts
-          jumpStateRef.current = "none";
-          jumpPeakYRef.current = null;
-          jumpFramesRef.current = 0;
-        }
-      } else if (crouchStateRef.current === "going_down") {
-        crouchFramesRef.current++;
-        
-        // Currently going down into crouch
-        if (currentHipY > crouchLowestYRef.current!) {
-          // Still going down, update lowest point
-          crouchLowestYRef.current = currentHipY;
-          crouchFramesRef.current = 0; // Reset counter when still descending
-          // Return crouching while going down
-          return "crouching";
-        } else if (currentHipY <= crouchLowestYRef.current! - (bodyHeight * 0.015)) {
-          // Started coming up (at least 1.5% of body height up from lowest point)
-          crouchStateRef.current = "coming_up";
-          crouchFramesRef.current = 0;
-          // Still crouching while coming up
-          return "crouching";
-        } else {
-          // At bottom or stopped descending
-          if (crouchFramesRef.current > 20) {
-            // Been at bottom too long without coming up - reset (false positive or just standing low)
-            crouchStateRef.current = "none";
-            crouchLowestYRef.current = null;
-            crouchFramesRef.current = 0;
-          } else {
-            // Still at bottom, might be real crouch - return crouching
-            return "crouching";
-          }
-        }
-      } else if (crouchStateRef.current === "coming_up") {
-        // Coming up after crouch - this confirms it was a real crouch
-        if (currentHipY <= previousHipYForCrouch - (bodyHeight * 0.01)) {
-          // Still going up
-          return "crouching";
-        } else {
-          // Back to standing - reset crouch state
-          crouchStateRef.current = "none";
-          crouchLowestYRef.current = null;
-          crouchFramesRef.current = 0;
-        }
-      }
-    }
-    
-    previousHipYForCrouchRef.current = currentHipY;
-    
-    // If in crouch state, reset jump and return crouching
-    if (crouchStateRef.current !== "none") {
-      // Reset jump detection when crouching
-      if (jumpStateRef.current !== "none") {
-        jumpStateRef.current = "none";
-        jumpPeakYRef.current = null;
-        jumpFramesRef.current = 0;
-      }
-      return "crouching";
-    }
+    const currentHipY = hipY;
 
     // JUMPING DETECTION: Track complete jump cycle (up then down)
-    // Only check if NOT crouching (mutually exclusive)
-    // CRITICAL: Don't detect jumps if player is in crouch position
     const previousHipY = previousYPositionRef.current;
     
-    if (previousHipY !== null && !inCrouchPosition) {
+    if (previousHipY !== null) {
       const deltaY = currentHipY - previousHipY;
       // Convert to percentage of current body height (works at any distance)
       const deltaYPercent = (deltaY / bodyHeight) * 100;
@@ -535,8 +418,7 @@ export default function SoloGame({ onClose }: SoloGameProps) {
       if (jumpStateRef.current === "none") {
         // Not jumping - check if starting to jump (significant upward movement)
         // Require stronger signal to avoid false positives from movement
-        // ADDITIONAL CHECK: Make sure we're not in a crouch position
-        if (velocityRef.current < -4 && currentHipY < previousHipY - (bodyHeight * 0.03) && !inCrouchPosition) {
+        if (velocityRef.current < -4 && currentHipY < previousHipY - (bodyHeight * 0.03)) {
           // Additional check: make sure we're not just moving backward
           // If body height is also increasing (player moving away), it's likely movement, not jump
           const bodyHeightChange = bodyHeight - baselineBodyHeight;
@@ -593,7 +475,7 @@ export default function SoloGame({ onClose }: SoloGameProps) {
     
     previousYPositionRef.current = currentHipY;
 
-    // Default to standing if not jumping or crouching
+    // Default to standing if not jumping
     return "standing";
   };
 

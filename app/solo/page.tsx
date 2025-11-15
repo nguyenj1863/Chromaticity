@@ -5,7 +5,7 @@ import { useStore } from "@/app/store/useStore";
 import { detectPose, initializeMoveNet } from "@/lib/tensorflow";
 import * as poseDetection from "@tensorflow-models/pose-detection";
 
-type PoseState = "standing" | "jumping" | "crouching" | "unknown";
+type PoseState = "standing" | "jumping" | "unknown";
 
 export default function SoloGamePage() {
   const { selectedCameraDeviceId, setSelectedCameraDeviceId } = useStore();
@@ -328,29 +328,6 @@ export default function SoloGamePage() {
     
     previousYPositionRef.current = currentHipY;
 
-    // Check for crouching: hips lower relative to shoulders, knees bent
-    if (leftKnee && rightKnee) {
-      const kneeY = (leftKnee.y + rightKnee.y) / 2;
-      
-      // Calculate if legs are bent (knees closer to hips than ankles)
-      let legsBent = false;
-      if (leftAnkle && rightAnkle) {
-        const ankleY = (leftAnkle.y + rightAnkle.y) / 2;
-        const kneeToHip = Math.abs(kneeY - hipY);
-        const kneeToAnkle = Math.abs(kneeY - ankleY);
-        // Legs are bent if knee-to-ankle distance is significantly less than knee-to-hip
-        legsBent = kneeToAnkle < kneeToHip * 0.7;
-      }
-
-      // Crouching: hips significantly lower than shoulders, and legs bent
-      const hipShoulderDiff = hipY - shoulderY;
-      const normalHipShoulderRatio = 0.35; // Normal: hips are ~35% of body height below shoulders
-      const crouchThreshold = bodyHeight * normalHipShoulderRatio * 1.4; // 40% more than normal
-
-      if (hipShoulderDiff > crouchThreshold && legsBent) {
-        return "crouching";
-      }
-    }
 
     // Default to standing (hips at normal position, not jumping)
     if (velocityRef.current > -2) {
