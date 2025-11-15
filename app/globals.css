@@ -47,6 +47,56 @@ body {
   }
 }
 
+/* Pixelated color-changing spinner */
+.pixel-spinner {
+  width: 64px;
+  height: 64px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pixel-spinner-dot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 0;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  animation: pixelSpinDot 1.5s linear infinite, pixelSpinColor 2s ease-in-out infinite;
+  transform-origin: 32px 32px;
+  left: 50%;
+  top: 50%;
+  margin-left: -4px;
+  margin-top: -4px;
+}
+
+@keyframes pixelSpinDot {
+  0% {
+    transform: rotate(var(--start-rot, 0deg)) translateX(24px) rotate(var(--end-rot, 0deg));
+  }
+  100% {
+    transform: rotate(calc(var(--start-rot, 0deg) + 360deg)) translateX(24px) rotate(calc(var(--end-rot, 0deg) - 360deg));
+  }
+}
+
+@keyframes pixelSpinColor {
+  0%, 100% {
+    background-color: #FF6B6B;
+    box-shadow: 0 0 8px #FF6B6B, 0 0 16px #FF6B6B;
+  }
+  33% {
+    background-color: #4ECDC4;
+    box-shadow: 0 0 8px #4ECDC4, 0 0 16px #4ECDC4;
+  }
+  66% {
+    background-color: #52BE80;
+    box-shadow: 0 0 8px #52BE80, 0 0 16px #52BE80;
+  }
+}
+
 .grey-overlay {
   position: absolute;
   inset: 0;

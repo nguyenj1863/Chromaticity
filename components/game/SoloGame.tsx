@@ -511,8 +511,23 @@ export default function SoloGame({ onClose }: SoloGameProps) {
         {/* Loading screen */}
         <div className="min-h-screen bg-black flex items-center justify-center">
           <div className="text-center">
-            <div className="mb-8">
-              <div className="inline-block animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-cyan-400"></div>
+            <div className="mb-8 flex justify-center">
+              {/* Pixelated spinner */}
+              <div className="pixel-spinner">
+                {[...Array(8)].map((_, i) => {
+                  const angle = (i * 45);
+                  return (
+                    <div
+                      key={i}
+                      className="pixel-spinner-dot"
+                      style={{
+                        '--start-rot': `${angle}deg`,
+                        '--end-rot': `-${angle}deg`,
+                      } as React.CSSProperties}
+                    />
+                  );
+                })}
+              </div>
             </div>
             <h2
               className="text-white text-xl mb-4"
