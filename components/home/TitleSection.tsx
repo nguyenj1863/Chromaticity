@@ -9,7 +9,7 @@ interface TitleSectionProps {
 
 export default function TitleSection({ title, colors }: TitleSectionProps) {
   return (
-    <div className="mt-24 mb-8">
+    <div className="mt-32 md:mt-40 mb-8">
       <div className="flex justify-center">
         <div className="pixel-title-responsive">
           <PixelTitle

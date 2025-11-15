@@ -26,7 +26,11 @@ function MenuButton({ label, onClick, description }: MenuButtonProps) {
   );
 }
 
-export default function MenuButtons() {
+interface MenuButtonsProps {
+  onGameStart?: () => void;
+}
+
+export default function MenuButtons({ onGameStart }: MenuButtonsProps) {
   const router = useRouter();
   const { player1, player2 } = useStore();
   const [showTrackHealthModal, setShowTrackHealthModal] = useState(false);
@@ -86,7 +90,7 @@ export default function MenuButtons() {
 
   return (
     <>
-      <div className="flex flex-col gap-8 items-center mt-12">
+      <div className="flex flex-col gap-8 items-center mt-12 md:mt-16">
         {buttons.map((button) => (
           <MenuButton
             key={button.label}
@@ -120,13 +124,11 @@ export default function MenuButtons() {
         onClose={() => setShowHowToPlayModal(false)}
         onConnectController={() => {
           setShowHowToPlayModal(false);
-          router.push("/solo");
+          onGameStart?.();
         }}
         onConnectCamera={() => {
-          // Handle camera connection - you can add camera setup logic here
-          // For now, we'll just proceed to solo
           setShowHowToPlayModal(false);
-          router.push("/solo");
+          onGameStart?.();
         }}
       />
     </>
