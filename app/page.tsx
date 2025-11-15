@@ -35,6 +35,16 @@ export default function Home() {
         <TitleSection title={title} colors={colors} />
         <MenuButtons />
         <SettingsButton />
+        
+        {/* Made with love text */}
+        <div className="absolute bottom-8 right-8 text-right">
+          <p className="text-white text-[10px] md:text-xs" style={{ fontFamily: "'Press Start 2P', monospace" }}>
+            made with love
+          </p>
+          <p className="text-white text-[8px] md:text-[10px] mt-1" style={{ fontFamily: "'Press Start 2P', monospace" }}>
+            ◎[▪‿▪]◎
+          </p>
+        </div>
       </div>
     </main>
   );

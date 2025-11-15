@@ -70,21 +70,21 @@ body {
 
 @keyframes colorFloat {
   0% {
-    transform: translateY(100vh) translateX(0) rotate(0deg) scale(0.5);
+    transform: translateY(120vh) translateX(0) rotate(0deg) scale(0.5);
     opacity: 0;
   }
-  10% {
+  5% {
     opacity: 0.8;
   }
   50% {
-    transform: translateY(50vh) translateX(50px) rotate(180deg) scale(1.2);
+    transform: translateY(50vh) translateX(30px) rotate(180deg) scale(1.2);
     opacity: 1;
   }
-  90% {
+  95% {
     opacity: 0.8;
   }
   100% {
-    transform: translateY(-20vh) translateX(100px) rotate(360deg) scale(0.5);
+    transform: translateY(-20vh) translateX(60px) rotate(360deg) scale(0.5);
     opacity: 0;
   }
 }
@@ -241,8 +241,8 @@ body {
 /* Glassmorphic pixel button for menu */
 .pixel-button-glass {
   font-family: 'Press Start 2P', monospace;
-  font-size: 14px;
-  padding: 16px 40px;
+  font-size: 18px;
+  padding: 24px 56px;
   background: rgba(255, 255, 255, 0.1);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -252,7 +252,7 @@ body {
   transition: all 0.3s ease;
   text-transform: uppercase;
   letter-spacing: 2px;
-  min-width: 280px;
+  min-width: 360px;
   text-shadow: 
     2px 2px 0px rgba(0, 0, 0, 0.5);
   position: relative;
@@ -288,14 +288,14 @@ body {
 .pixel-button-icon-modern {
   background: linear-gradient(135deg, #6b6b6b 0%, #5a5a5a 100%);
   color: #ffffff;
-  padding: 14px;
+  padding: 10px;
   box-shadow: 
-    0 0 0 3px #000000,
-    0 0 0 6px #6b6b6b,
-    0 8px 0 0 #4a4a4a,
-    0 8px 0 3px #000000,
+    0 0 0 2px #000000,
+    0 0 0 5px #6b6b6b,
+    0 6px 0 0 #4a4a4a,
+    0 6px 0 2px #000000,
     0 0 20px rgba(102, 126, 234, 0.3);
-  border: 3px solid #000000;
+  border: 2px solid #000000;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -321,18 +321,18 @@ body {
 .pixel-button-icon-modern:hover {
   transform: translateY(4px) rotate(15deg);
   box-shadow: 
-    0 0 0 3px #000000,
-    0 0 0 6px #6b6b6b,
-    0 4px 0 0 #4a4a4a,
-    0 4px 0 3px #000000,
+    0 0 0 2px #000000,
+    0 0 0 5px #6b6b6b,
+    0 3px 0 0 #4a4a4a,
+    0 3px 0 2px #000000,
     0 0 30px rgba(102, 126, 234, 0.6);
 }
 
 .pixel-button-icon-modern:active {
-  transform: translateY(8px) rotate(30deg);
+  transform: translateY(6px) rotate(30deg);
   box-shadow: 
-    0 0 0 3px #000000,
-    0 0 0 6px #6b6b6b;
+    0 0 0 2px #000000,
+    0 0 0 5px #6b6b6b;
 }
 
 .gear-icon {

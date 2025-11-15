@@ -21,7 +21,7 @@ export default function TitleSection({ title, colors }: TitleSectionProps) {
         </div>
       </div>
       {/* Story subtitle */}
-      <p className="text-grey-text text-center mt-12 text-xs md:text-sm px-4 max-w-2xl mx-auto leading-relaxed">
+      <p className="text-grey-text text-center mt-12 text-base md:text-lg px-4 max-w-2xl mx-auto leading-relaxed" style={{ fontFamily: "'Press Start 2P', monospace" }}>
         THE VILLAIN STOLE ALL COLORS FROM THE WORLD
         <br />
         RESTORE THE COLORS AND BRING LIFE BACK

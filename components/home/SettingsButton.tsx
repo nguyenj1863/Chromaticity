@@ -19,8 +19,8 @@ export default function SettingsButton() {
       <div className="absolute bottom-8 left-8">
         <button className="pixel-button-icon-modern group" onClick={handleClick}>
           <svg
-            width="28"
-            height="28"
+            width="22"
+            height="22"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
