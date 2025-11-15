@@ -403,7 +403,8 @@ export default function SoloGame({ onClose }: SoloGameProps) {
     const baselineBodyHeight = baselineBodyHeightRef.current || bodyHeight;
     const currentHipY = hipY;
 
-    // JUMPING DETECTION: Track complete jump cycle (up then down)
+    // JUMPING DETECTION: Track complete jump cycle (standing → up → down → standing)
+    // Player must: 1) Start from standing, 2) Move upward, 3) Come back down
     const previousHipY = previousYPositionRef.current;
     
     if (previousHipY !== null) {
@@ -416,16 +417,19 @@ export default function SoloGame({ onClose }: SoloGameProps) {
       
       // Jump state machine
       if (jumpStateRef.current === "none") {
-        // Not jumping - check if starting to jump (significant upward movement)
-        // Require stronger signal to avoid false positives from movement
+        // Not jumping - must start from standing position
+        // Check if starting to jump: significant upward movement from standing
+        // Require strong signal: velocity < -4 (upward) AND displacement > 3% body height
         if (velocityRef.current < -4 && currentHipY < previousHipY - (bodyHeight * 0.03)) {
           // Additional check: make sure we're not just moving backward
           // If body height is also increasing (player moving away), it's likely movement, not jump
           const bodyHeightChange = bodyHeight - baselineBodyHeight;
           const bodyHeightIncrease = bodyHeightChange / baselineBodyHeight;
           
-          // Only start jump if body isn't significantly larger (not moving away)
-          if (bodyHeightIncrease < 0.1) {
+          // Only start jump if:
+          // 1. Body isn't significantly larger (not moving away from camera)
+          // 2. We have sustained upward movement (not just noise)
+          if (bodyHeightIncrease < 0.1 && Math.abs(velocityRef.current) > 4) {
             jumpStateRef.current = "going_up";
             jumpPeakYRef.current = currentHipY;
             jumpFramesRef.current = 0;
@@ -434,7 +438,7 @@ export default function SoloGame({ onClose }: SoloGameProps) {
       } else if (jumpStateRef.current === "going_up") {
         jumpFramesRef.current++;
         
-        // Currently going up - track the peak
+        // Currently going up - track the peak (highest point)
         if (currentHipY < jumpPeakYRef.current!) {
           // Still going up, update peak
           jumpPeakYRef.current = currentHipY;
@@ -442,33 +446,37 @@ export default function SoloGame({ onClose }: SoloGameProps) {
           return "jumping";
         } else if (currentHipY >= jumpPeakYRef.current! + (bodyHeight * 0.015)) {
           // Started coming down (at least 1.5% of body height down from peak)
+          // This confirms we reached the peak and are now descending
           jumpStateRef.current = "coming_down";
           jumpFramesRef.current = 0;
           return "jumping";
         } else {
           // At peak or stopped ascending
           // If we've been at peak for more than 20 frames (~0.67 seconds) without descending,
-          // it's likely a false positive (player moved backward and stopped)
+          // it's likely a false positive (player moved backward and stopped, or just standing)
           if (jumpFramesRef.current > 20) {
-            // False positive - reset
+            // False positive - reset to standing
             jumpStateRef.current = "none";
             jumpPeakYRef.current = null;
             jumpFramesRef.current = 0;
           } else {
-            // Still might be a real jump at peak - return jumping
+            // Still at peak, might be real jump - return jumping
             return "jumping";
           }
         }
       } else if (jumpStateRef.current === "coming_down") {
         // Coming down after peak - this confirms it was a real jump
+        // Must complete the downward movement to finish the jump cycle
         if (currentHipY >= previousHipY + (bodyHeight * 0.01)) {
-          // Still going down
+          // Still going down - continue jumping state
           return "jumping";
         } else {
-          // Landed or stopped descending - reset jump state
+          // Landed or stopped descending - back to standing
+          // Reset jump state to allow new jump detection
           jumpStateRef.current = "none";
           jumpPeakYRef.current = null;
           jumpFramesRef.current = 0;
+          // Return standing - jump cycle complete
         }
       }
     }
