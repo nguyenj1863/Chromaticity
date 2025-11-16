@@ -24,6 +24,16 @@ export default function SoloGame({ onClose }: SoloGameProps) {
   const [loadingMessage, setLoadingMessage] = useState("Initializing TensorFlow...");
   const [error, setError] = useState<string | null>(null);
   const [imuData, setImuData] = useState<IMUData | null>(null);
+  const [levelReady, setLevelReady] = useState(false);
+  const levelReadyRef = useRef(false);
+  const [stepProgress, setStepProgress] = useState<{ [key: number]: number }>({
+    1: 0,
+    2: 0,
+    3: 0,
+    4: 0,
+    5: 0,
+  });
+  const [currentStep, setCurrentStep] = useState(1);
   const animationFrameRef = useRef<number | null>(null);
   const previousYPositionRef = useRef<number | null>(null);
   const velocityRef = useRef<number>(0);
@@ -89,27 +99,39 @@ export default function SoloGame({ onClose }: SoloGameProps) {
         setError(null);
         
         // Step 1: Initialize MoveNet
-        setLoadingMessage("Step 1/4: Loading TensorFlow MoveNet...");
+        setCurrentStep(1);
+        setStepProgress({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
+        setLoadingMessage("Step 1/5: Loading TensorFlow MoveNet...");
+        setStepProgress(prev => ({ ...prev, 1: 20 }));
+        
         try {
+          setStepProgress(prev => ({ ...prev, 1: 50 }));
           await initializeMoveNet();
+          setStepProgress(prev => ({ ...prev, 1: 100 }));
         } catch (tfError: any) {
           console.error("TensorFlow initialization error:", tfError);
           throw new Error(`TensorFlow error: ${tfError.message || "Failed to load MoveNet model"}`);
         }
         
         // Step 2: Check camera availability
-        setLoadingMessage("Step 2/4: Checking camera availability...");
+        setCurrentStep(2);
+        setStepProgress(prev => ({ ...prev, 2: 0 }));
+        setLoadingMessage("Step 2/5: Checking camera availability...");
+        
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           throw new Error("Camera API not available. Please use a modern browser with camera support.");
         }
         
+        setStepProgress(prev => ({ ...prev, 2: 30 }));
         const devices = await navigator.mediaDevices.enumerateDevices();
+        setStepProgress(prev => ({ ...prev, 2: 60 }));
         const videoDevices = devices.filter(device => device.kind === 'videoinput');
         
         if (videoDevices.length === 0) {
           throw new Error("No camera devices found. Please connect a camera and try again.");
         }
         
+        setStepProgress(prev => ({ ...prev, 2: 80 }));
         // Check if the selected device ID is still valid
         if (selectedCameraDeviceId) {
           const deviceExists = videoDevices.some(device => device.deviceId === selectedCameraDeviceId);
@@ -117,9 +139,12 @@ export default function SoloGame({ onClose }: SoloGameProps) {
             setSelectedCameraDeviceId(null);
           }
         }
+        setStepProgress(prev => ({ ...prev, 2: 100 }));
         
         // Step 3: Use existing camera stream or request new one
-        setLoadingMessage("Step 3/4: Setting up camera...");
+        setCurrentStep(3);
+        setStepProgress(prev => ({ ...prev, 3: 0 }));
+        setLoadingMessage("Step 3/5: Setting up camera...");
         
         let stream: MediaStream;
         
@@ -127,15 +152,20 @@ export default function SoloGame({ onClose }: SoloGameProps) {
         const streamToUse = streamRef.current || existingStream;
         
         if (streamToUse && streamToUse.active && !streamUsedRef.current) {
+          setStepProgress(prev => ({ ...prev, 3: 50 }));
           stream = streamToUse;
           streamRef.current = streamToUse; // Ensure it's in ref
           streamUsedRef.current = true; // Mark that we've used the stream
+          setStepProgress(prev => ({ ...prev, 3: 100 }));
         } else if (streamUsedRef.current && streamRef.current && streamRef.current.active) {
+          setStepProgress(prev => ({ ...prev, 3: 50 }));
           // Stream was already used, reuse our stored reference
           stream = streamRef.current;
+          setStepProgress(prev => ({ ...prev, 3: 100 }));
         } else {
           // Request new camera access
-          setLoadingMessage("Step 3/4: Requesting camera access...");
+          setLoadingMessage("Step 3/5: Requesting camera access...");
+          setStepProgress(prev => ({ ...prev, 3: 20 }));
           
           // Use the selected camera device ID if available, otherwise use default
           const videoConstraints: MediaTrackConstraints = {
@@ -150,9 +180,11 @@ export default function SoloGame({ onClose }: SoloGameProps) {
           }
           
           try {
+            setStepProgress(prev => ({ ...prev, 3: 40 }));
             stream = await navigator.mediaDevices.getUserMedia({
               video: videoConstraints,
             });
+            setStepProgress(prev => ({ ...prev, 3: 80 }));
           } catch (cameraError: any) {
             console.error("Camera access error:", cameraError);
             
@@ -210,25 +242,28 @@ export default function SoloGame({ onClose }: SoloGameProps) {
           throw new Error("Video element not found. Please refresh the page.");
         }
 
-        setLoadingMessage("Step 4/4: Starting video stream...");
+        setLoadingMessage("Step 4/5: Starting video stream...");
         
         if (!stream.active) {
           throw new Error("Camera stream is no longer active. It may have been disconnected.");
         }
         
+        setStepProgress(prev => ({ ...prev, 4: 20 }));
         videoRef.current.srcObject = stream;
         streamRef.current = stream; // Store in ref for later use
         mountedStream = stream;
         
         try {
+          setStepProgress(prev => ({ ...prev, 4: 40 }));
           await videoRef.current.play();
+          setStepProgress(prev => ({ ...prev, 4: 60 }));
         } catch (playError: any) {
           console.error("Error playing video:", playError);
           throw playError;
         }
         
         // Wait for video to be ready with timeout
-        setLoadingMessage("Step 4/4: Waiting for video to be ready...");
+        setLoadingMessage("Step 4/5: Waiting for video to be ready...");
         
         await new Promise((resolve, reject) => {
           if (!videoRef.current) {
@@ -242,19 +277,76 @@ export default function SoloGame({ onClose }: SoloGameProps) {
           
           const onLoaded = () => {
             clearTimeout(timeout);
+            setStepProgress(prev => ({ ...prev, 4: 100 }));
             resolve(undefined);
           };
           
           if (videoRef.current.readyState >= 2) {
             clearTimeout(timeout);
+            setStepProgress(prev => ({ ...prev, 4: 100 }));
             resolve(undefined);
           } else {
-            videoRef.current.onloadedmetadata = onLoaded;
+            const progressInterval = setInterval(() => {
+              if (videoRef.current && videoRef.current.readyState >= 1) {
+                setStepProgress(prev => ({ ...prev, 4: Math.min(90, (prev[4] || 0) + 5) }));
+              }
+            }, 200);
+            
+            videoRef.current.onloadedmetadata = () => {
+              clearInterval(progressInterval);
+              onLoaded();
+            };
             videoRef.current.onerror = () => {
+              clearInterval(progressInterval);
               clearTimeout(timeout);
               reject(new Error("Video element error"));
             };
           }
+        });
+        
+        // Step 5: Load game level/map
+        setCurrentStep(5);
+        setStepProgress(prev => ({ ...prev, 5: 0 }));
+        setLoadingMessage("Step 5/5: Loading game map...");
+        
+        // Reset level ready flag
+        levelReadyRef.current = false;
+        setLevelReady(false);
+        
+        // Generate level data early (this is fast, but we'll wait for rendering)
+        setStepProgress(prev => ({ ...prev, 5: 20 }));
+        const { LevelGenerator } = await import("@/lib/levelGenerator");
+        setStepProgress(prev => ({ ...prev, 5: 40 }));
+        const generator = new LevelGenerator();
+        const levelData = generator.generateLevel();
+        setStepProgress(prev => ({ ...prev, 5: 60 }));
+        
+        // Wait a bit for the level to render (give React time to mount and render)
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        setStepProgress(prev => ({ ...prev, 5: 70 }));
+        
+        // Wait for level ready callback (with timeout)
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error("Map loading timeout. Please refresh the page."));
+          }, 10000); // 10 second timeout for map loading
+          
+          // Check if level is ready, poll every 100ms and update progress
+          const checkLevel = setInterval(() => {
+            // Use ref to check current value (avoids closure issue)
+            if (levelReadyRef.current) {
+              clearInterval(checkLevel);
+              clearTimeout(timeout);
+              setStepProgress(prev => ({ ...prev, 5: 100 }));
+              resolve(undefined);
+            } else {
+              // Gradually increase progress while waiting
+              setStepProgress(prev => ({ 
+                ...prev, 
+                5: Math.min(95, (prev[5] || 70) + 1) 
+              }));
+            }
+          }, 100);
         });
         
         setLoadingMessage("Starting pose detection...");
@@ -713,7 +805,7 @@ export default function SoloGame({ onClose }: SoloGameProps) {
     }
   }, [isInitialized, isLoading, controllerConnection]);
 
-  // Loading screen - but render video element in background so it's available for initialization
+  // Loading screen - but render video element and game scene in background so they're available for initialization
   if (isLoading) {
     return (
       <>
@@ -730,8 +822,16 @@ export default function SoloGame({ onClose }: SoloGameProps) {
           className="hidden"
         />
         
+        {/* Render game scene in background (off-screen) so level can generate */}
+        <div className="absolute -left-[9999px] -top-[9999px] w-1 h-1 overflow-hidden">
+          <GameScene poseState={poseState} imuData={imuData} onLevelReady={() => {
+            levelReadyRef.current = true;
+            setLevelReady(true);
+          }} />
+        </div>
+        
         {/* Loading screen */}
-        <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="min-h-screen bg-black flex items-center justify-center relative z-50">
           <div className="text-center">
             <div className="mb-8 flex justify-center">
               {/* Pixelated spinner */}
@@ -758,11 +858,55 @@ export default function SoloGame({ onClose }: SoloGameProps) {
               LOADING GAME...
             </h2>
             <p
-              className="text-white text-sm opacity-80"
+              className="text-white text-sm opacity-80 mb-6"
               style={{ fontFamily: "'Press Start 2P', monospace" }}
             >
               {loadingMessage}
             </p>
+            
+            {/* Progress bars for each step */}
+            <div className="space-y-3 max-w-md mx-auto">
+              {[1, 2, 3, 4, 5].map((step) => {
+                const progress = stepProgress[step] || 0;
+                const isActive = currentStep === step;
+                const isComplete = currentStep > step;
+                
+                return (
+                  <div key={step} className="w-full">
+                    <div className="flex justify-between items-center mb-1">
+                      <span
+                        className={`text-xs ${
+                          isActive ? 'text-white' : isComplete ? 'text-green-400' : 'text-gray-500'
+                        }`}
+                        style={{ fontFamily: "'Press Start 2P', monospace" }}
+                      >
+                        STEP {step}
+                      </span>
+                      <span
+                        className={`text-xs ${
+                          isActive ? 'text-white' : isComplete ? 'text-green-400' : 'text-gray-500'
+                        }`}
+                        style={{ fontFamily: "'Press Start 2P', monospace" }}
+                      >
+                        {Math.round(progress)}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-gray-800 border-2 border-gray-700 h-4 relative overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-300 ${
+                          isComplete ? 'bg-green-500' : isActive ? 'bg-blue-500' : 'bg-gray-600'
+                        }`}
+                        style={{ width: `${progress}%` }}
+                      />
+                      {/* Pixelated effect */}
+                      <div className="absolute inset-0 opacity-20" style={{
+                        backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.3) 2px, rgba(0,0,0,0.3) 4px)'
+                      }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       </>
@@ -815,7 +959,7 @@ export default function SoloGame({ onClose }: SoloGameProps) {
     <div className="min-h-screen bg-black relative overflow-hidden">
       {/* Main 3D game scene */}
       <div className="w-full h-screen">
-        <GameScene poseState={poseState} imuData={imuData} />
+        <GameScene poseState={poseState} imuData={imuData} onLevelReady={() => setLevelReady(true)} />
       </div>
 
       {/* Raw IMU Data Display - Top left of main game scene */}

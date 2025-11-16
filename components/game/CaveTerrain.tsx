@@ -40,20 +40,20 @@ export default function CaveTerrain() {
   return (
     <>
       {/* 2D Platform - Grey platform extending forward */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.2, 0]}>
         <boxGeometry args={[platformWidth, platformLength, 0.2]} />
         <meshStandardMaterial 
-          color="#5A5A5A" 
+          color="#AAAAAA" 
           flatShading 
-          roughness={0.9}
+          roughness={0.7}
           metalness={0.1}
         />
       </mesh>
 
-      {/* Cave Background - Pixelated cave wall behind platform */}
+      {/* Cave Background - Pixelated cave wall behind platform (facing camera from side view) */}
       <mesh 
-        position={[0, 5, -8]} 
-        rotation={[0, 0, 0]}
+        position={[-8, 5, 0]} 
+        rotation={[0, Math.PI / 2, 0]}
         geometry={caveWallGeometry}
       >
         <meshStandardMaterial 
@@ -61,6 +61,7 @@ export default function CaveTerrain() {
           flatShading 
           roughness={1.0}
           metalness={0.0}
+          side={THREE.DoubleSide}
         />
       </mesh>
 
@@ -71,7 +72,7 @@ export default function CaveTerrain() {
       >
         <boxGeometry args={[50, 30, 1]} />
         <meshStandardMaterial 
-          color="#2A2A2A" 
+          color="#6A6A6A" 
           flatShading 
           roughness={1.0}
         />
@@ -84,7 +85,7 @@ export default function CaveTerrain() {
       >
         <boxGeometry args={[50, 30, 1]} />
         <meshStandardMaterial 
-          color="#1A1A1A" 
+          color="#4A4A4A" 
           flatShading 
           roughness={1.0}
         />
