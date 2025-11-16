@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { LevelData } from "@/lib/levelGenerator";
 import { useStore } from "@/app/store/useStore";
+import type { BluetoothRemoteGATTCharacteristic } from "@/app/store/useStore";
 import { detectPose, initializeMoveNet } from "@/lib/tensorflow";
 import * as poseDetection from "@tensorflow-models/pose-detection";
 import GameScene from "./GameScene";
@@ -15,7 +18,16 @@ interface SoloGameProps {
 }
 
 export default function SoloGame({ onClose }: SoloGameProps) {
-  const { selectedCameraDeviceId, setSelectedCameraDeviceId, cameraStream: existingStream, setCameraStream, controllerConnection } = useStore();
+  const router = useRouter();
+  const {
+    selectedCameraDeviceId,
+    setSelectedCameraDeviceId,
+    cameraStream: existingStream,
+    setCameraStream,
+    controllerConnection,
+    player1,
+    player2,
+  } = useStore();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [poseState, setPoseState] = useState<PoseState>("unknown");
   const [isInitialized, setIsInitialized] = useState(false);
@@ -23,15 +35,27 @@ export default function SoloGame({ onClose }: SoloGameProps) {
   const [loadingMessage, setLoadingMessage] = useState("Initializing TensorFlow...");
   const [error, setError] = useState<string | null>(null);
   const [imuData, setImuData] = useState<IMUData | null>(null);
-  const [useMockIMU, setUseMockIMU] = useState(false);
-  const [devJump, setDevJump] = useState(false);
+  const [levelData, setLevelData] = useState<LevelData | null>(null);
   const [collectedCrystals, setCollectedCrystals] = useState<number[]>([]);
   const [shotTargets, setShotTargets] = useState<number[]>([]);
   const [fireToken, setFireToken] = useState<number>(0);
   const [crystalMessage, setCrystalMessage] = useState<string | null>(null);
   const [levelReady, setLevelReady] = useState(false);
+  const [caloriesBurned, setCaloriesBurned] = useState(0);
+  const [hasWon, setHasWon] = useState(false);
+  const [showExitPrompt, setShowExitPrompt] = useState(false);
   const levelReadyRef = useRef(false);
   const crystalMessageTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastCalorieSampleRef = useRef<number | null>(null);
+  const controllerCharacteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
+  const lastCalorieSyncRef = useRef<number>(0);
+  const sessionIdRef = useRef<string>("");
+  if (!sessionIdRef.current) {
+    sessionIdRef.current =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `session-${Date.now()}`;
+  }
   const crystalList = useMemo(
     () => [
       { id: 1, label: "Red", color: "#FF6B6B" },
@@ -43,6 +67,15 @@ export default function SoloGame({ onClose }: SoloGameProps) {
   const handleCrystalCollected = useCallback(
     ({ id, name }: { id: number; name: string; color: string }) => {
       setCollectedCrystals((prev) => (prev.includes(id) ? prev : [...prev, id]));
+      setLevelData((prev: LevelData | null) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          crystals: prev.crystals.map((crystal) =>
+            crystal.id === id ? { ...crystal, state: "collected" } : crystal
+          ),
+        };
+      });
       setCrystalMessage(name);
       if (crystalMessageTimeoutRef.current) {
         clearTimeout(crystalMessageTimeoutRef.current);
@@ -60,6 +93,124 @@ export default function SoloGame({ onClose }: SoloGameProps) {
     },
     []
   );
+
+  useEffect(() => {
+    if (hasWon) return;
+    if (collectedCrystals.length < crystalList.length) return;
+    setHasWon(true);
+    setLevelData((prev) => {
+      if (!prev?.bossGate) return prev;
+      return {
+        ...prev,
+        bossGate: {
+          ...prev.bossGate,
+          open: true,
+        },
+      };
+    });
+  }, [collectedCrystals, crystalList.length, hasWon]);
+
+  const handleReturnHome = useCallback(() => {
+    if (onClose) {
+      onClose();
+      return;
+    }
+    router.push("/");
+  }, [onClose, router]);
+
+  const handleRestartGame = useCallback(() => {
+    window.location.reload();
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setShowExitPrompt((prev) => !prev);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const MOVEMENT_THRESHOLD = 0.08;
+  const caloriesDisplay = caloriesBurned.toFixed(caloriesBurned >= 100 ? 1 : 2);
+  const crystalsFound = collectedCrystals.length;
+  const totalCrystals = crystalList.length;
+  const isPlayerMoving =
+    imuData?.walking_speed !== undefined && imuData.walking_speed > MOVEMENT_THRESHOLD;
+  const playerMetrics = useMemo(() => {
+    const players = [player1, player2];
+    const withCompleteData = players.find((player) => player && player.bmr && player.weight);
+    const fallbackWeightPlayer = players.find((player) => player && player.weight);
+    const fallbackBmrPlayer = players.find((player) => player && player.bmr);
+    return {
+      weightKg: withCompleteData?.weight ?? fallbackWeightPlayer?.weight ?? null,
+      bmr: withCompleteData?.bmr ?? fallbackBmrPlayer?.bmr ?? null,
+    };
+  }, [player1, player2]);
+
+  useEffect(() => {
+    if (!imuData?.time_ms) return;
+    if (lastCalorieSampleRef.current === null) {
+      lastCalorieSampleRef.current = imuData.time_ms;
+      return;
+    }
+    const deltaMs = imuData.time_ms - lastCalorieSampleRef.current;
+    lastCalorieSampleRef.current = imuData.time_ms;
+    if (deltaMs <= 0) return;
+    const deltaMinutes = deltaMs / 60000;
+    const hasSpeed = typeof imuData.walking_speed === "number";
+    const walkingSpeedValue = hasSpeed ? imuData.walking_speed! : 0;
+    if (!hasSpeed || walkingSpeedValue <= MOVEMENT_THRESHOLD) {
+      return;
+    }
+    const walkingSpeed = Math.max(0, Math.min(walkingSpeedValue, 1));
+    const metValue = 2.5 + walkingSpeed * 5;
+    const weightKg = playerMetrics.weightKg ?? 70;
+    const metCaloriesPerMinute = (metValue * 3.5 * weightKg) / 200;
+
+    let caloriesPerMinute = metCaloriesPerMinute;
+    if (playerMetrics.bmr) {
+      const bmrPerMinute = playerMetrics.bmr / (24 * 60);
+      const restingMetCalories = (1 * 3.5 * weightKg) / 200;
+      const activityDelta = Math.max(0, metCaloriesPerMinute - restingMetCalories);
+      caloriesPerMinute = bmrPerMinute + activityDelta;
+    }
+
+    const deltaCalories = caloriesPerMinute * deltaMinutes;
+    if (deltaCalories <= 0) return;
+
+    const nextTotal = caloriesBurned + deltaCalories;
+    setCaloriesBurned(nextTotal);
+
+    const characteristic = controllerCharacteristicRef.current;
+    if (characteristic && typeof (characteristic as any).writeValue === "function") {
+      const payload = JSON.stringify({ calorie: Number(nextTotal.toFixed(1)) });
+      try {
+        const encoder = new TextEncoder();
+        (characteristic as any).writeValue(encoder.encode(payload));
+      } catch (err) {
+        console.error("Failed to write calorie data to controller:", err);
+      }
+    }
+
+    const now = Date.now();
+    if (now - lastCalorieSyncRef.current >= 5000) {
+      lastCalorieSyncRef.current = now;
+      fetch("/api/calories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: sessionIdRef.current,
+          deltaCalories: Number(deltaCalories.toFixed(3)),
+          totalCalories: Number(nextTotal.toFixed(3)),
+          timestamp: imuData.time_ms,
+        }),
+      }).catch((err) => console.error("Failed to sync calories:", err));
+    }
+  }, [imuData, playerMetrics, caloriesBurned]);
 
   useEffect(() => {
     return () => {
@@ -93,7 +244,6 @@ export default function SoloGame({ onClose }: SoloGameProps) {
   const streamRef = useRef<MediaStream | null>(null); // Keep reference to stream
   const isMountedRef = useRef(true); // Use ref for mounting state to avoid strict mode issues
   const isInitializedRef = useRef(false); // Track initialization state in ref for cleanup
-  const mockImuIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Capture the existing stream immediately when component mounts
   useEffect(() => {
@@ -460,28 +610,15 @@ export default function SoloGame({ onClose }: SoloGameProps) {
   }, []); // Only run once on mount - don't depend on stream or device ID
 
   // Detect pose and determine state
-  // HOW IT WORKS:
-  // 1. CALIBRATION: When player first appears, we establish a baseline "normal standing" pose
-  //    - Collects 30 frames of data to establish baseline hip-shoulder ratio
-  //    - This baseline adapts to the player's natural standing position
-  //    - Works regardless of initial distance from camera
-  //
-  // 2. JUMPING: Detects rapid upward movement relative to baseline
-  //    - Tracks hip position changes over time
-  //    - Uses relative movement (percentage of current body height)
-  //    - Requires significant upward velocity (4% of body height per frame)
-  //    - Must complete full cycle: up then down
-  //
-  // 3. STANDING: Default state when pose matches baseline (within tolerance)
+  // Original logic: calibrate hip-to-shoulder ratio and track hip motion cycle
   const detectPoseState = (poses: poseDetection.Pose[]): PoseState => {
     if (poses.length === 0) return "standing";
 
     const pose = poses[0];
     const keypoints = pose.keypoints;
 
-    // Get key points we need (filter by confidence)
     const getKeypoint = (name: string) => {
-      const kp = keypoints.find((kp) => kp.name === name);
+      const kp = keypoints.find((point) => point.name === name);
       return kp && kp.score && kp.score > 0.3 ? kp : null;
     };
 
@@ -490,139 +627,92 @@ export default function SoloGame({ onClose }: SoloGameProps) {
     const rightShoulder = getKeypoint("right_shoulder");
     const leftHip = getKeypoint("left_hip");
     const rightHip = getKeypoint("right_hip");
-    const leftKnee = getKeypoint("left_knee");
-    const rightKnee = getKeypoint("right_knee");
-    const leftAnkle = getKeypoint("left_ankle");
-    const rightAnkle = getKeypoint("right_ankle");
 
-    // Check if we have enough keypoints
     if (!nose || !leftShoulder || !rightShoulder || !leftHip || !rightHip) {
       return "standing";
     }
 
-    // Calculate average positions
     const shoulderY = (leftShoulder.y + rightShoulder.y) / 2;
     const hipY = (leftHip.y + rightHip.y) / 2;
     const headY = nose.y;
-
-    // Calculate body height (head to hip)
     const bodyHeight = Math.abs(headY - hipY);
-    if (bodyHeight < 30) return "standing"; // Too small, likely detection error
+    if (bodyHeight < 30) return "standing";
 
-    // Calculate current hip-shoulder ratio
     const hipShoulderDiff = hipY - shoulderY;
     const hipShoulderRatio = hipShoulderDiff / bodyHeight;
 
-    // CALIBRATION PHASE: Establish baseline when player first appears
     if (!isCalibratedRef.current) {
       calibrationFramesRef.current++;
-      
-      // Collect baseline data over 30 frames (about 1 second at 30fps)
       if (calibrationFramesRef.current <= 30) {
-        // Accumulate baseline ratio
         if (baselineHipShoulderRatioRef.current === null) {
           baselineHipShoulderRatioRef.current = hipShoulderRatio;
         } else {
-          // Average the ratios for a stable baseline
-          baselineHipShoulderRatioRef.current = 
-            (baselineHipShoulderRatioRef.current * (calibrationFramesRef.current - 1) + hipShoulderRatio) / 
+          baselineHipShoulderRatioRef.current =
+            (baselineHipShoulderRatioRef.current * (calibrationFramesRef.current - 1) + hipShoulderRatio) /
             calibrationFramesRef.current;
         }
         baselineBodyHeightRef.current = bodyHeight;
-        // During calibration, default to standing
         return "standing";
       } else {
-        // Calibration complete
         isCalibratedRef.current = true;
       }
     }
 
-    // After calibration, use baseline for detection
     const baselineRatio = baselineHipShoulderRatioRef.current || 0.35;
     const baselineBodyHeight = baselineBodyHeightRef.current || bodyHeight;
+    const previousHipY = previousYPositionRef.current;
     const currentHipY = hipY;
 
-    // JUMPING DETECTION: Track complete jump cycle (standing → up → down → standing)
-    // Player must: 1) Start from standing, 2) Move upward, 3) Come back down
-    const previousHipY = previousYPositionRef.current;
-    
+    // Jump detection uses relative hip movement and velocity
     if (previousHipY !== null) {
       const deltaY = currentHipY - previousHipY;
-      // Convert to percentage of current body height (works at any distance)
       const deltaYPercent = (deltaY / bodyHeight) * 100;
-      
-      // Smooth velocity with exponential moving average
       velocityRef.current = deltaYPercent * 0.3 + velocityRef.current * 0.7;
-      
-      // Jump state machine
+
       if (jumpStateRef.current === "none") {
-        // Not jumping - must start from standing position
-        // Check if starting to jump: significant upward movement from standing
-        // Require strong signal: velocity < -4 (upward) AND displacement > 3% body height
-        if (velocityRef.current < -4 && currentHipY < previousHipY - (bodyHeight * 0.03)) {
-          // Additional check: make sure we're not just moving backward
-          // If body height is also increasing (player moving away), it's likely movement, not jump
+        const ratioDiff = hipShoulderRatio - baselineRatio;
+        const hipVelocityThreshold = -4;
+        const hipDisplacementThreshold = bodyHeight * 0.03;
+
+        if (velocityRef.current < hipVelocityThreshold && currentHipY < previousHipY - hipDisplacementThreshold) {
           const bodyHeightChange = bodyHeight - baselineBodyHeight;
           const bodyHeightIncrease = bodyHeightChange / baselineBodyHeight;
-          
-          // Only start jump if:
-          // 1. Body isn't significantly larger (not moving away from camera)
-          // 2. We have sustained upward movement (not just noise)
           if (bodyHeightIncrease < 0.1 && Math.abs(velocityRef.current) > 4) {
             jumpStateRef.current = "going_up";
             jumpPeakYRef.current = currentHipY;
             jumpFramesRef.current = 0;
+            return "jumping";
           }
         }
       } else if (jumpStateRef.current === "going_up") {
         jumpFramesRef.current++;
-        
-        // Currently going up - track the peak (highest point)
         if (currentHipY < jumpPeakYRef.current!) {
-          // Still going up, update peak
           jumpPeakYRef.current = currentHipY;
-          jumpFramesRef.current = 0; // Reset counter when still ascending
+          jumpFramesRef.current = 0;
           return "jumping";
-        } else if (currentHipY >= jumpPeakYRef.current! + (bodyHeight * 0.015)) {
-          // Started coming down (at least 1.5% of body height down from peak)
-          // This confirms we reached the peak and are now descending
+        } else if (currentHipY >= jumpPeakYRef.current! + bodyHeight * 0.015) {
           jumpStateRef.current = "coming_down";
           jumpFramesRef.current = 0;
           return "jumping";
-        } else {
-          // At peak or stopped ascending
-          // If we've been at peak for more than 20 frames (~0.67 seconds) without descending,
-          // it's likely a false positive (player moved backward and stopped, or just standing)
-          if (jumpFramesRef.current > 20) {
-            // False positive - reset to standing
-            jumpStateRef.current = "none";
-            jumpPeakYRef.current = null;
-            jumpFramesRef.current = 0;
-          } else {
-            // Still at peak, might be real jump - return jumping
-            return "jumping";
-          }
-        }
-      } else if (jumpStateRef.current === "coming_down") {
-        // Coming down after peak - this confirms it was a real jump
-        // Must complete the downward movement to finish the jump cycle
-        if (currentHipY >= previousHipY + (bodyHeight * 0.01)) {
-          // Still going down - continue jumping state
-          return "jumping";
-        } else {
-          // Landed or stopped descending - back to standing
-          // Reset jump state to allow new jump detection
+        } else if (jumpFramesRef.current > 20) {
           jumpStateRef.current = "none";
           jumpPeakYRef.current = null;
           jumpFramesRef.current = 0;
-          // Return standing - jump cycle complete
+        } else {
+          return "jumping";
+        }
+      } else if (jumpStateRef.current === "coming_down") {
+        if (currentHipY >= previousHipY + bodyHeight * 0.01) {
+          return "jumping";
+        } else {
+          jumpStateRef.current = "none";
+          jumpPeakYRef.current = null;
+          jumpFramesRef.current = 0;
         }
       }
     }
-    
-    previousYPositionRef.current = currentHipY;
 
-    // Default to standing if not jumping
+    previousYPositionRef.current = currentHipY;
     return "standing";
   };
 
@@ -691,7 +781,7 @@ export default function SoloGame({ onClose }: SoloGameProps) {
 
   // Set up real controller IMU data reception when game is ready
   useEffect(() => {
-    if (isInitialized && !isLoading && controllerConnection && !useMockIMU) {
+    if (isInitialized && !isLoading && controllerConnection) {
       let characteristic: any = null;
       let notificationInterval: NodeJS.Timeout | null = null;
       
@@ -720,6 +810,7 @@ export default function SoloGame({ onClose }: SoloGameProps) {
               ...controllerConnection,
               characteristic,
             });
+            controllerCharacteristicRef.current = characteristic;
           }
           
           // Set up periodic check to verify connection is alive
@@ -746,52 +837,12 @@ export default function SoloGame({ onClose }: SoloGameProps) {
         if (characteristic) {
           characteristic.stopNotifications().catch(console.error);
         }
+        if (controllerCharacteristicRef.current === characteristic) {
+          controllerCharacteristicRef.current = null;
+        }
       };
     }
   }, [isInitialized, isLoading, controllerConnection]);
-
-  // Mock IMU data generator for testing without controller
-  useEffect(() => {
-    // Clean up helper
-    const stopMock = () => {
-      if (mockImuIntervalRef.current) {
-        clearInterval(mockImuIntervalRef.current);
-        mockImuIntervalRef.current = null;
-      }
-    };
-
-    if (!useMockIMU || !isInitialized || isLoading) {
-      stopMock();
-      return;
-    }
-
-    let t = 0;
-    mockImuIntervalRef.current = setInterval(() => {
-      // Simulate deliberate forward shake motion (values exceed shake thresholds)
-      const baseAmplitude = 0.75; // Above SHAKE_THRESHOLD
-      const jitter = 0.15;
-      const accelX = baseAmplitude * Math.sin(t * 1.5) + jitter * (Math.random() - 0.5);
-      const accelY = 0.4 * Math.cos(t * 1.1) + jitter * (Math.random() - 0.5);
-      const accelZ = 1.0 + 0.12 * Math.sin(t * 0.9) + jitter * (Math.random() - 0.5);
-
-      const angularX = 0.1 * Math.sin(t * 1.1);
-      const angularY = 0.08 * Math.cos(t * 0.9);
-      const angularZ = 0.05 * Math.sin(t * 1.5);
-
-      const mockData: IMUData = {
-        time_ms: Date.now(),
-        accel_g: [accelX, accelY, accelZ],
-        angularv_rad_s: [angularX, angularY, angularZ],
-      };
-
-      setImuData(mockData);
-      t += 0.25;
-    }, 100);
-
-    return () => {
-      stopMock();
-    };
-  }, [useMockIMU, isInitialized, isLoading]);
 
   // Loading screen - but render video element and game scene in background so they're available for initialization
   if (isLoading) {
@@ -811,8 +862,6 @@ export default function SoloGame({ onClose }: SoloGameProps) {
           <GameScene
             poseState={poseState}
             imuData={imuData}
-            forceMove={useMockIMU}
-            forceJump={devJump}
             collectedCrystals={collectedCrystals}
             shotTargets={shotTargets}
             onTargetShot={handleTargetShot}
@@ -956,102 +1005,64 @@ export default function SoloGame({ onClose }: SoloGameProps) {
         <GameScene
           poseState={poseState}
           imuData={imuData}
-          forceMove={useMockIMU}
-          forceJump={devJump}
           collectedCrystals={collectedCrystals}
           shotTargets={shotTargets}
           fireToken={fireToken}
           onTargetShot={handleTargetShot}
           onCrystalCollected={handleCrystalCollected}
-          onLevelReady={() => setLevelReady(true)}
+          onLevelReady={() => {
+            setLevelReady(true);
+          }}
+          levelData={levelData}
+          onLevelDataChange={setLevelData}
         />
       </div>
 
-      {/* Raw IMU Data Display - Top left of main game scene */}
-      {imuData && (
-        <div className="absolute top-4 left-4 bg-black bg-opacity-70 px-4 py-3 rounded z-50">
-          <p
-            className="text-white text-xs mb-2"
-            style={{ fontFamily: "'Press Start 2P', monospace" }}
-          >
-            RAW IMU DATA
-          </p>
-          <div
-            className="text-white text-xs space-y-1"
-            style={{ fontFamily: "'Press Start 2P', monospace" }}
-          >
-            {imuData.walking_speed !== undefined && (
-              <p>walking_speed: {imuData.walking_speed.toFixed(3)}</p>
-            )}
-            {imuData.aiming_angle_deg !== undefined && (
-              <p>aim_angle: {imuData.aiming_angle_deg?.toFixed(2)}°</p>
-            )}
-            {imuData.accel_g && (
-              <p>
-                accel_g: [{imuData.accel_g[0].toFixed(6)}, {imuData.accel_g[1].toFixed(6)}, {imuData.accel_g[2].toFixed(6)}]
-              </p>
-            )}
-            {imuData.angularv_rad_s && (
-              <p>
-                angularv: [{imuData.angularv_rad_s[0].toFixed(6)}, {imuData.angularv_rad_s[1].toFixed(6)}, {imuData.angularv_rad_s[2].toFixed(6)}]
-              </p>
-            )}
-            <p className="text-[10px] opacity-70">time: {imuData.time_ms}ms</p>
-          </div>
-        </div>
-      )}
-
-      {/* Mock IMU controls & crystal tracker */}
+      {/* Player progress indicators */}
       <div className="absolute top-4 right-4 flex flex-col items-end space-y-3 z-50">
-        <div className="flex flex-col items-end space-y-2">
-          <button
-            onClick={() => setUseMockIMU(prev => !prev)}
-            className={`px-4 py-2 text-xs border-2 ${
-              useMockIMU ? 'bg-green-600 border-green-300' : 'bg-gray-800 border-gray-500'
-            } text-white`}
-            style={{ fontFamily: "'Press Start 2P', monospace" }}
-          >
-            {useMockIMU ? "STOP MOCK MOVEMENT" : "USE MOCK MOVEMENT"}
-          </button>
-          <button
-            onClick={() => {
-              setDevJump(true);
-              setTimeout(() => setDevJump(false), 150);
-            }}
-            className="px-4 py-2 text-xs border-2 bg-gray-800 border-gray-500 text-white"
-            style={{ fontFamily: "'Press Start 2P', monospace" }}
-          >
-            DEV JUMP
-          </button>
-          <div
-            className="text-xs text-white bg-black bg-opacity-60 px-3 py-2 rounded"
-            style={{ fontFamily: "'Press Start 2P', monospace" }}
-          >
-            {useMockIMU
-              ? "Mock IMU active"
-              : controllerConnection
-                ? "Controller connected"
-                : "No controller detected"}
+        <div
+          className="bg-black bg-opacity-80 px-5 py-4 rounded text-white text-xs w-64 border border-white/10 shadow-lg space-y-2"
+          style={{ fontFamily: "'Press Start 2P', monospace" }}
+        >
+          <div className="flex items-center justify-between text-[11px] tracking-[0.25em] text-gray-300">
+            <span>CALORIES</span>
+            <span className={isPlayerMoving ? "text-green-400" : "text-yellow-300"}>
+              {isPlayerMoving ? "ACTIVE" : "IDLE"}
+            </span>
+          </div>
+          <div className="flex items-baseline justify-between">
+            <span className="text-3xl text-green-300">{caloriesDisplay}</span>
+            <span className="text-xs text-gray-400">kcal</span>
           </div>
         </div>
         <div
-          className="bg-black bg-opacity-70 px-4 py-3 rounded text-white text-xs w-56"
+          className="bg-black bg-opacity-80 px-4 py-4 rounded text-white text-xs w-64 border border-white/10 shadow-lg space-y-2"
           style={{ fontFamily: "'Press Start 2P', monospace" }}
         >
-          <div className="text-sm mb-2 tracking-wide">CRYSTALS</div>
-          {crystalList.map((crystal) => {
-            const found = collectedCrystals.includes(crystal.id);
-            return (
-              <div key={crystal.id} className="flex justify-between items-center text-[11px] mb-1 last:mb-0">
-                <span style={{ color: crystal.color }}>{crystal.label}</span>
-                <span className={found ? "text-green-400" : "text-gray-500"}>
-                  {found ? "FOUND" : "MISSING"}
-                </span>
-              </div>
-            );
-          })}
+          <div className="flex items-center justify-between text-sm">
+            <span>CRYSTALS</span>
+            <span className="text-gray-300">
+              {crystalsFound}/{totalCrystals}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {crystalList.map((crystal) => {
+              const found = collectedCrystals.includes(crystal.id);
+              return (
+                <div
+                  key={crystal.id}
+                  className={`flex flex-col items-center justify-center rounded px-2 py-1 border text-[10px] ${
+                    found ? "border-green-400 text-green-300" : "border-white/20 text-gray-400"
+                  }`}
+                >
+                  <span style={{ color: found ? crystal.color : undefined }}>{crystal.label}</span>
+                  <span>{found ? "FOUND" : "MISSING"}</span>
+                </div>
+              );
+            })}
+          </div>
           {crystalMessage && (
-            <div className="mt-2 text-[11px] text-green-300">
+            <div className="text-[11px] text-green-300 text-center">
               {crystalMessage} collected!
             </div>
           )}
@@ -1070,6 +1081,52 @@ export default function SoloGame({ onClose }: SoloGameProps) {
           />
         </div>
       </div>
+
+      {hasWon && (
+        <div className="absolute inset-0 bg-black/85 flex items-center justify-center z-50 px-4">
+          <div className="bg-black border-2 border-white px-8 py-10 text-center max-w-md w-full space-y-4">
+            <h2 className="text-2xl text-white" style={{ fontFamily: "'Press Start 2P', monospace" }}>
+              YOU WIN!
+            </h2>
+            <p className="text-sm text-green-300" style={{ fontFamily: "'Press Start 2P', monospace" }}>
+              Calories burned: {caloriesBurned.toFixed(caloriesBurned >= 100 ? 1 : 2)} kcal
+            </p>
+            <button
+              onClick={handleReturnHome}
+              className="mt-4 px-6 py-3 text-xs border-2 border-white text-white hover:bg-white hover:text-black transition"
+              style={{ fontFamily: "'Press Start 2P', monospace" }}
+            >
+              RETURN HOME
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!hasWon && showExitPrompt && (
+        <div className="absolute inset-0 bg-black/70 flex items-center justify-center z-40 px-4">
+          <div className="bg-black border-2 border-white px-8 py-6 text-center max-w-sm w-full space-y-4">
+            <h3 className="text-xl text-white" style={{ fontFamily: "'Press Start 2P', monospace" }}>
+              EXIT?
+            </h3>
+            <div className="flex items-center justify-center space-x-4">
+              <button
+                onClick={handleRestartGame}
+                className="px-6 py-2 text-xs border-2 border-white text-white hover:bg-white hover:text-black transition"
+                style={{ fontFamily: "'Press Start 2P', monospace" }}
+              >
+                YES
+              </button>
+              <button
+                onClick={() => setShowExitPrompt(false)}
+                className="px-6 py-2 text-xs border-2 border-white text-white hover:bg-white hover:text-black transition"
+                style={{ fontFamily: "'Press Start 2P', monospace" }}
+              >
+                NO
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

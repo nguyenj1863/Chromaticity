@@ -361,7 +361,7 @@ export class LevelGenerator {
     // Crystal 2 - Hidden, appears after shooting target
     crystals.push({
       id: 2,
-      x: 0, y: 1.5, z: currentZ + 2.5,
+      x: 0, y: 1.3, z: currentZ + 4.2,
       color: 'blue',
       state: 'hidden',
       requiresTarget: 1

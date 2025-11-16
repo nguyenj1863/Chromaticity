@@ -7,6 +7,7 @@ import TrackHealthModal from "@/components/modals/TrackHealthModal";
 import BMISettingsModal from "@/components/modals/BMISettingsModal";
 import PlayerSelectionModal from "@/components/modals/PlayerSelectionModal";
 import HowToPlayModal from "@/components/modals/HowToPlayModal";
+import AnalyticsModal from "@/components/modals/AnalyticsModal";
 
 interface MenuButtonProps {
   label: string;
@@ -37,6 +38,7 @@ export default function MenuButtons({ onGameStart }: MenuButtonsProps) {
   const [showBMIModal, setShowBMIModal] = useState(false);
   const [showPlayerSelectionModal, setShowPlayerSelectionModal] = useState(false);
   const [showHowToPlayModal, setShowHowToPlayModal] = useState(false);
+  const [showAnalyticsModal, setShowAnalyticsModal] = useState(false);
 
   const hasPlayer1Data = player1.height && player1.weight && player1.age && player1.gender;
   const hasPlayer2Data = player2.height && player2.weight && player2.age && player2.gender;
@@ -83,7 +85,7 @@ export default function MenuButtons({ onGameStart }: MenuButtonsProps) {
     },
     {
       label: "ANALYTICS",
-      onClick: () => router.push("/analytics"),
+      onClick: () => setShowAnalyticsModal(true),
       description: "View game analytics",
     },
   ];
@@ -130,6 +132,11 @@ export default function MenuButtons({ onGameStart }: MenuButtonsProps) {
           setShowHowToPlayModal(false);
           onGameStart?.();
         }}
+      />
+
+      <AnalyticsModal
+        isOpen={showAnalyticsModal}
+        onClose={() => setShowAnalyticsModal(false)}
       />
     </>
   );

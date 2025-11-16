@@ -20,6 +20,9 @@ interface PlayerCharacterProps {
   forceMove?: boolean;
   forceJump?: boolean;
   disableMovement?: boolean;
+  focusMode?: boolean;
+  aimPitch?: number | null;
+  focusYaw?: number | null;
   onPositionChange?: (position: THREE.Vector3) => void;
   collectedCrystals?: number[];
   onCrystalCollected?: (id: number) => void;
@@ -36,6 +39,9 @@ export default function PlayerCharacter({
   forceMove = false,
   forceJump = false,
   disableMovement = false,
+  focusMode = false,
+  aimPitch = null,
+  focusYaw = null,
   onPositionChange,
   collectedCrystals = [],
   onCrystalCollected,
@@ -68,6 +74,9 @@ export default function PlayerCharacter({
   const lastCheckpointRef = useRef<number | null>(null);
   const lastDeathTimeRef = useRef<number>(0);
   const collectedCrystalsRef = useRef<number[]>(collectedCrystals);
+  const headRef = useRef<THREE.Mesh>(null);
+  const leftArmRef = useRef<THREE.Mesh>(null);
+  const rightArmRef = useRef<THREE.Mesh>(null);
   const levelToWorld = useCallback((x: number, y: number, z: number) => {
     return new THREE.Vector3(-x, y, -z);
   }, []);
@@ -246,6 +255,24 @@ export default function PlayerCharacter({
     
     // Notify parent of position change for camera following
     onPositionChange?.(updatedPosition);
+
+    // Focus-mode aiming poses
+    const poseLerp = THREE.MathUtils.clamp(delta * 8, 0, 1);
+    const clampedPitch = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(aimPitch ?? 0, -60, 60));
+    const targetHeadYaw = THREE.MathUtils.degToRad(focusMode ? focusYaw ?? 0 : 0);
+    const targetHeadPitch = focusMode ? -clampedPitch * 0.4 : 0;
+    if (headRef.current) {
+      headRef.current.rotation.y = THREE.MathUtils.lerp(headRef.current.rotation.y, targetHeadYaw, poseLerp);
+      headRef.current.rotation.x = THREE.MathUtils.lerp(headRef.current.rotation.x, targetHeadPitch, poseLerp);
+    }
+
+    const armPitchBase = focusMode ? -0.8 + clampedPitch : 0;
+    if (leftArmRef.current) {
+      leftArmRef.current.rotation.x = THREE.MathUtils.lerp(leftArmRef.current.rotation.x, armPitchBase, poseLerp);
+    }
+    if (rightArmRef.current) {
+      rightArmRef.current.rotation.x = THREE.MathUtils.lerp(rightArmRef.current.rotation.x, armPitchBase, poseLerp);
+    }
   });
 
   return (
@@ -260,7 +287,7 @@ export default function PlayerCharacter({
       
       <group ref={groupRef} position={[0, 0.6, 0]} rotation={[0, 0, 0]}>
       {/* Head - pixelated blocky style (grey/white - no color) */}
-      <mesh position={[0, 1.2, 0]}>
+      <mesh ref={headRef} position={[0, 1.2, 0]}>
         <boxGeometry args={[0.4, 0.4, 0.4]} />
         <meshStandardMaterial color="#CCCCCC" flatShading roughness={0.8} />
       </mesh>
@@ -272,13 +299,13 @@ export default function PlayerCharacter({
       </mesh>
 
       {/* Left Arm (medium grey) */}
-      <mesh position={[-0.4, 0.7, 0]} rotation={[0, 0, 0.2]}>
+      <mesh ref={leftArmRef} position={[-0.4, 0.7, 0]} rotation={[0, 0, 0.2]}>
         <boxGeometry args={[0.2, 0.6, 0.2]} />
         <meshStandardMaterial color="#AAAAAA" flatShading roughness={0.8} />
       </mesh>
 
       {/* Right Arm (medium grey) */}
-      <mesh position={[0.4, 0.7, 0]} rotation={[0, 0, -0.2]}>
+      <mesh ref={rightArmRef} position={[0.4, 0.7, 0]} rotation={[0, 0, -0.2]}>
         <boxGeometry args={[0.2, 0.6, 0.2]} />
         <meshStandardMaterial color="#AAAAAA" flatShading roughness={0.8} />
       </mesh>

@@ -13,29 +13,66 @@ import { LevelData } from "@/lib/levelGenerator";
 interface GameSceneProps {
   poseState: "standing" | "jumping" | "unknown";
   imuData?: IMUData | null;
-  forceMove?: boolean;
-  forceJump?: boolean;
   fireToken?: number;
   collectedCrystals: number[];
   shotTargets: number[];
   onTargetShot?: (targetId: number) => void;
   onCrystalCollected?: (payload: { id: number; name: string; color: string }) => void;
   onLevelReady?: () => void;
+  levelData?: LevelData | null;
+  onLevelDataChange?: (data: LevelData) => void;
 }
 
 // Component to set camera to look at character from the side and follow it
-function CameraController({ characterZ, characterY, focusTarget }: { characterZ: number; characterY: number; focusTarget?: THREE.Vector3 | null }) {
+function CameraController({
+  characterZ,
+  characterY,
+  focusTarget,
+  focusMode,
+  characterPosition,
+  focusYaw,
+  aimPitch,
+}: {
+  characterZ: number;
+  characterY: number;
+  focusTarget?: THREE.Vector3 | null;
+  focusMode: boolean;
+  characterPosition?: THREE.Vector3 | null;
+  focusYaw?: number | null;
+  aimPitch?: number | null;
+}) {
   const { camera } = useThree();
   
   useEffect(() => {
-    const targetPos = focusTarget ?? new THREE.Vector3(0, characterY + 0.35, characterZ);
-    const camPos = focusTarget
-      ? new THREE.Vector3(targetPos.x + 4, targetPos.y + 0.5, targetPos.z)
-      : new THREE.Vector3(6, characterY + 0.35, characterZ);
-    camera.position.copy(camPos);
-    camera.lookAt(targetPos);
+    if (focusMode && characterPosition) {
+      const headOffset = new THREE.Vector3(0, 1.1, 0);
+      const camPos = characterPosition.clone().add(headOffset);
+      camera.position.copy(camPos);
+      let yawDeg = focusYaw;
+      if (yawDeg == null && focusTarget) {
+        const dir = focusTarget.clone().sub(camPos);
+        yawDeg = (THREE.MathUtils.radToDeg(Math.atan2(dir.x, -dir.z)) + 360) % 360;
+      }
+      const yawRad = THREE.MathUtils.degToRad(yawDeg ?? 0);
+      const pitchRad = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(aimPitch ?? 0, -60, 60));
+      const forward = new THREE.Vector3(
+        Math.sin(yawRad) * Math.cos(pitchRad),
+        Math.sin(pitchRad),
+        -Math.cos(yawRad) * Math.cos(pitchRad)
+      );
+      const lookTarget = camPos.clone().add(forward);
+      camera.up.set(0, 1, 0);
+      camera.lookAt(lookTarget);
+    } else {
+      const targetPos = focusTarget ?? new THREE.Vector3(0, characterY + 0.35, characterZ);
+      const camPos = focusTarget
+        ? new THREE.Vector3(targetPos.x + 4, targetPos.y + 0.5, targetPos.z)
+        : new THREE.Vector3(6, characterY + 0.35, characterZ);
+      camera.position.copy(camPos);
+      camera.lookAt(targetPos);
+    }
     camera.updateProjectionMatrix();
-  }, [camera, characterZ, characterY, focusTarget]);
+  }, [camera, characterZ, characterY, focusTarget, focusMode, characterPosition, focusYaw, aimPitch]);
 
   return null;
 }
@@ -43,20 +80,20 @@ function CameraController({ characterZ, characterY, focusTarget }: { characterZ:
 export default function GameScene({
   poseState,
   imuData,
-  forceMove = false,
-  forceJump = false,
   fireToken = 0,
   collectedCrystals,
   shotTargets,
   onTargetShot,
   onCrystalCollected,
-  onLevelReady
+  onLevelReady,
+  levelData: controlledLevelData,
+  onLevelDataChange,
 }: GameSceneProps) {
   const [characterZ, setCharacterZ] = useState(0);
   const [characterY, setCharacterY] = useState(0.6);
   const [characterPosition, setCharacterPosition] = useState<THREE.Vector3 | null>(null);
   const [devMode, setDevMode] = useState(false);
-  const [levelData, setLevelData] = useState<LevelData | null>(null);
+  const [levelData, setLevelData] = useState<LevelData | null>(controlledLevelData ?? null);
   const [currentCheckpointId, setCurrentCheckpointId] = useState<number | null>(null);
   const [respawnRequest, setRespawnRequest] = useState<{ position: THREE.Vector3; token: number } | null>(null);
   const [activeFocusTarget, setActiveFocusTarget] = useState<LevelData["targets"][number] | null>(null);
@@ -68,17 +105,34 @@ export default function GameScene({
     if (!activeFocusTarget) return null;
     return levelToWorld(activeFocusTarget.x, activeFocusTarget.y, activeFocusTarget.z);
   }, [activeFocusTarget, levelToWorld]);
-  const [aimingAngle, setAimingAngle] = useState<number | null>(null);
-  const aimAlignment = useMemo(() => {
-    if (!activeFocusTarget || !characterPosition || aimingAngle == null) return null;
+  const [aimPitch, setAimPitch] = useState<number | null>(null);
+  const focusYaw = useMemo(() => {
+    if (!activeFocusTarget || !characterPosition) return null;
     const targetPos = levelToWorld(activeFocusTarget.x, activeFocusTarget.y, activeFocusTarget.z);
     const dirX = targetPos.x - characterPosition.x;
     const dirZ = targetPos.z - characterPosition.z;
-    const targetAngle = (THREE.MathUtils.radToDeg(Math.atan2(dirX, -dirZ)) + 360) % 360;
-    let diff = Math.abs(targetAngle - aimingAngle);
-    if (diff > 180) diff = 360 - diff;
-    return { diff, targetAngle };
-  }, [activeFocusTarget, characterPosition, aimingAngle, levelToWorld]);
+    return (THREE.MathUtils.radToDeg(Math.atan2(dirX, -dirZ)) + 360) % 360;
+  }, [activeFocusTarget, characterPosition, levelToWorld]);
+
+  const aimAlignment = useMemo(() => {
+    if (!activeFocusTarget || !characterPosition) return null;
+    const targetPos = levelToWorld(activeFocusTarget.x, activeFocusTarget.y, activeFocusTarget.z);
+    const headPos = characterPosition.clone().add(new THREE.Vector3(0, 1.1, 0));
+    const dir = targetPos.clone().sub(headPos);
+    const horizontal = Math.hypot(dir.x, dir.z) || 0.0001;
+    const targetPitch = THREE.MathUtils.radToDeg(Math.atan2(dir.y, horizontal));
+    if (aimPitch == null) {
+      return { diff: Math.abs(targetPitch), signedDiff: targetPitch, targetPitch };
+    }
+    const signedDiff = targetPitch - aimPitch;
+    return { diff: Math.abs(signedDiff), signedDiff, targetPitch };
+  }, [activeFocusTarget, characterPosition, aimPitch, levelToWorld]);
+
+  useEffect(() => {
+    if (controlledLevelData) {
+      setLevelData(controlledLevelData);
+    }
+  }, [controlledLevelData]);
 
   useEffect(() => {
     if (checkpoints.length > 0 && currentCheckpointId === null) {
@@ -168,7 +222,11 @@ export default function GameScene({
 
   useEffect(() => {
     if (imuData?.aiming_angle_deg != null) {
-      setAimingAngle((imuData.aiming_angle_deg % 360 + 360) % 360);
+      const clamped = THREE.MathUtils.clamp(imuData.aiming_angle_deg, -75, 75);
+      setAimPitch((prev) => {
+        if (prev == null) return clamped;
+        return THREE.MathUtils.lerp(prev, clamped, 0.25);
+      });
     }
   }, [imuData]);
 
@@ -202,7 +260,15 @@ export default function GameScene({
         {devMode ? (
           <DevCameraController enabled={true} />
         ) : (
-          <CameraController characterZ={characterZ} characterY={characterY} focusTarget={focusTargetWorld} />
+          <CameraController
+            characterZ={characterZ}
+            characterY={characterY}
+            focusTarget={focusTargetWorld}
+            focusMode={!!activeFocusTarget}
+            characterPosition={characterPosition}
+            focusYaw={focusYaw}
+            aimPitch={aimPitch}
+          />
         )}
         
         {/* Lighting - cave lighting */}
@@ -214,7 +280,10 @@ export default function GameScene({
         {/* Scene */}
         <GameLevel
           onLevelReady={onLevelReady}
-          onLevelDataChange={setLevelData}
+          onLevelDataChange={(data) => {
+            setLevelData(data);
+            onLevelDataChange?.(data);
+          }}
           collectedCrystals={collectedCrystals}
           shotTargets={shotTargets}
         />
@@ -222,9 +291,10 @@ export default function GameScene({
           <PlayerCharacter
             poseState={poseState}
             imuData={imuData}
-            forceMove={forceMove}
-            forceJump={forceJump}
             disableMovement={!!activeFocusTarget}
+            focusMode={!!activeFocusTarget}
+            aimPitch={aimAlignment?.targetPitch ?? aimPitch}
+            focusYaw={focusYaw}
             onPositionChange={handlePositionChange}
             collectedCrystals={collectedCrystals}
             onCrystalCollected={handleCrystalPickup}
@@ -238,21 +308,37 @@ export default function GameScene({
       </Canvas>
 
       {activeFocusTarget && (
-        <div
-          className="absolute inset-0 flex flex-col items-center justify-center text-white z-40 pointer-events-none"
-          style={{ fontFamily: "'Press Start 2P', monospace" }}
-        >
-          <div className="bg-black bg-opacity-70 px-6 py-4 rounded border border-white text-center space-y-2">
-            <p className="text-sm">FOCUS MODE</p>
-            <p className="text-xs opacity-80">Aim your controller toward the target</p>
-            <p className="text-[10px] opacity-60">Press the fire button on the controller</p>
-            {aimAlignment && (
-              <p className="text-[10px] opacity-80">
-                Aim offset: {aimAlignment.diff.toFixed(1)}°
-              </p>
-            )}
+        <>
+          <div
+            className="absolute inset-0 flex flex-col items-center justify-center text-white z-40 pointer-events-none"
+            style={{ fontFamily: "'Press Start 2P', monospace" }}
+          >
+            <div className="bg-black bg-opacity-70 px-6 py-4 rounded border border-white text-center space-y-2">
+              <p className="text-sm">FOCUS MODE</p>
+              <p className="text-xs opacity-80">First-person aim active</p>
+              <p className="text-[10px] opacity-60">Align the bullseye and press fire</p>
+              {aimAlignment && (
+                <p className="text-[10px] opacity-80">
+                  Offset: {aimAlignment.diff.toFixed(1)}°
+                </p>
+              )}
+            </div>
           </div>
-        </div>
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center z-40">
+            <div
+              className="relative w-32 h-32"
+              style={{
+                transform: `translate(0px, ${aimAlignment ? THREE.MathUtils.clamp(-aimAlignment.signedDiff!, -25, 25) : 0}px)`,
+              }}
+            >
+              <div className="absolute inset-0 rounded-full border-2 border-white/80" />
+              <div className="absolute inset-[30%] rounded-full border border-white/60" />
+              <div className="absolute top-1/2 left-0 right-0 h-[1px] bg-white/70" />
+              <div className="absolute left-1/2 top-0 bottom-0 w-[1px] bg-white/70" />
+              <div className="absolute inset-[45%] rounded-full bg-red-500 shadow-[0_0_8px_rgba(255,0,0,0.8)]" />
+            </div>
+          </div>
+        </>
       )}
 
       {targetHitMessage && (

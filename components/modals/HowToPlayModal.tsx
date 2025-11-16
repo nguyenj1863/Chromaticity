@@ -462,10 +462,26 @@ export default function HowToPlayModal({
                     CAMERA NOT FOUND - CLICK TO TRY AGAIN
                   </p>
                 )}
+                {(cameraStatus === 'connected' && controllerStatus !== 'connected') && (
+                  <p 
+                    className="text-center text-yellow-300 text-[10px] opacity-80"
+                    style={{ fontFamily: "'Press Start 2P', monospace" }}
+                  >
+                    CONNECT A CONTROLLER TO CONTINUE
+                  </p>
+                )}
+                {(controllerStatus === 'connected' && cameraStatus !== 'connected') && (
+                  <p 
+                    className="text-center text-yellow-300 text-[10px] opacity-80"
+                    style={{ fontFamily: "'Press Start 2P', monospace" }}
+                  >
+                    CONNECT A CAMERA TO CONTINUE
+                  </p>
+                )}
               </div>
 
-              {/* Continue button - show when camera is connected (controller optional for now) */}
-              {cameraStatus === 'connected' && (
+              {/* Continue button - require both camera and controller */}
+              {cameraStatus === 'connected' && controllerStatus === 'connected' && (
                 <div className="mt-6 flex justify-center">
                   <button
                     onClick={() => {
