@@ -980,8 +980,22 @@ export default function SoloGame({ onClose }: SoloGameProps) {
             className="text-white text-xs space-y-1"
             style={{ fontFamily: "'Press Start 2P', monospace" }}
           >
-            <p>accel_g: [{imuData.accel_g[0].toFixed(6)}, {imuData.accel_g[1].toFixed(6)}, {imuData.accel_g[2].toFixed(6)}]</p>
-            <p>angularv: [{imuData.angularv_rad_s[0].toFixed(6)}, {imuData.angularv_rad_s[1].toFixed(6)}, {imuData.angularv_rad_s[2].toFixed(6)}]</p>
+            {imuData.walking_speed !== undefined && (
+              <p>walking_speed: {imuData.walking_speed.toFixed(3)}</p>
+            )}
+            {imuData.aiming_angle_deg !== undefined && (
+              <p>aim_angle: {imuData.aiming_angle_deg?.toFixed(2)}°</p>
+            )}
+            {imuData.accel_g && (
+              <p>
+                accel_g: [{imuData.accel_g[0].toFixed(6)}, {imuData.accel_g[1].toFixed(6)}, {imuData.accel_g[2].toFixed(6)}]
+              </p>
+            )}
+            {imuData.angularv_rad_s && (
+              <p>
+                angularv: [{imuData.angularv_rad_s[0].toFixed(6)}, {imuData.angularv_rad_s[1].toFixed(6)}, {imuData.angularv_rad_s[2].toFixed(6)}]
+              </p>
+            )}
             <p className="text-[10px] opacity-70">time: {imuData.time_ms}ms</p>
           </div>
         </div>

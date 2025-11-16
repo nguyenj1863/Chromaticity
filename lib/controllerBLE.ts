@@ -12,27 +12,23 @@ export function parseIMUData(data: string): IMUData | { fire: boolean; time_ms?:
       return { fire: true, time_ms: parsed.time_ms };
     }
 
-    // Validate the data structure
-    if (
-      typeof parsed.time_ms === "number" &&
-      Array.isArray(parsed.accel_g) &&
-      parsed.accel_g.length === 3 &&
-      Array.isArray(parsed.angularv_rad_s) &&
-      parsed.angularv_rad_s.length === 3
-    ) {
-      return {
-        time_ms: parsed.time_ms,
-        accel_g: [
-          parsed.accel_g[0],
-          parsed.accel_g[1],
-          parsed.accel_g[2],
-        ] as [number, number, number],
-        angularv_rad_s: [
-          parsed.angularv_rad_s[0],
-          parsed.angularv_rad_s[1],
-          parsed.angularv_rad_s[2],
-        ] as [number, number, number],
-      };
+    const imuPayload: IMUData = {
+      time_ms: parsed.time_ms,
+      walking_speed: typeof parsed.walking_speed === "number" ? parsed.walking_speed : undefined,
+      aiming_angle_deg: typeof parsed.aiming_angle_deg === "number" ? parsed.aiming_angle_deg : undefined,
+      roll_deg: typeof parsed.roll_deg === "number" ? parsed.roll_deg : undefined,
+      yaw_deg: typeof parsed.yaw_deg === "number" ? parsed.yaw_deg : undefined,
+    };
+
+    if (Array.isArray(parsed.accel_g) && parsed.accel_g.length === 3) {
+      imuPayload.accel_g = [parsed.accel_g[0], parsed.accel_g[1], parsed.accel_g[2]];
+    }
+    if (Array.isArray(parsed.angularv_rad_s) && parsed.angularv_rad_s.length === 3) {
+      imuPayload.angularv_rad_s = [parsed.angularv_rad_s[0], parsed.angularv_rad_s[1], parsed.angularv_rad_s[2]];
+    }
+
+    if (typeof imuPayload.time_ms === "number") {
+      return imuPayload;
     }
     
     return null;

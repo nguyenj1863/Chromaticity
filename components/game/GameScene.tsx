@@ -68,6 +68,17 @@ export default function GameScene({
     if (!activeFocusTarget) return null;
     return levelToWorld(activeFocusTarget.x, activeFocusTarget.y, activeFocusTarget.z);
   }, [activeFocusTarget, levelToWorld]);
+  const [aimingAngle, setAimingAngle] = useState<number | null>(null);
+  const aimAlignment = useMemo(() => {
+    if (!activeFocusTarget || !characterPosition || aimingAngle == null) return null;
+    const targetPos = levelToWorld(activeFocusTarget.x, activeFocusTarget.y, activeFocusTarget.z);
+    const dirX = targetPos.x - characterPosition.x;
+    const dirZ = targetPos.z - characterPosition.z;
+    const targetAngle = (THREE.MathUtils.radToDeg(Math.atan2(dirX, -dirZ)) + 360) % 360;
+    let diff = Math.abs(targetAngle - aimingAngle);
+    if (diff > 180) diff = 360 - diff;
+    return { diff, targetAngle };
+  }, [activeFocusTarget, characterPosition, aimingAngle, levelToWorld]);
 
   useEffect(() => {
     if (checkpoints.length > 0 && currentCheckpointId === null) {
@@ -141,14 +152,25 @@ export default function GameScene({
   const lastFireTokenRef = useRef<number>(0);
 
   useEffect(() => {
-    if (!activeFocusTarget) return;
+    if (!activeFocusTarget || !aimAlignment) return;
     if (!fireToken || fireToken === lastFireTokenRef.current) return;
     lastFireTokenRef.current = fireToken;
-    onTargetShot?.(activeFocusTarget.id);
-    setTargetHitMessage("Target Destroyed!");
-    setActiveFocusTarget(null);
-    setTimeout(() => setTargetHitMessage(null), 2000);
-  }, [fireToken, activeFocusTarget, onTargetShot]);
+    if (aimAlignment.diff <= 12) {
+      onTargetShot?.(activeFocusTarget.id);
+      setTargetHitMessage("Target Destroyed!");
+      setActiveFocusTarget(null);
+      setTimeout(() => setTargetHitMessage(null), 2000);
+    } else {
+      setTargetHitMessage("Adjust Aim");
+      setTimeout(() => setTargetHitMessage(null), 1500);
+    }
+  }, [fireToken, activeFocusTarget, onTargetShot, aimAlignment]);
+
+  useEffect(() => {
+    if (imuData?.aiming_angle_deg != null) {
+      setAimingAngle((imuData.aiming_angle_deg % 360 + 360) % 360);
+    }
+  }, [imuData]);
 
   // Toggle dev mode with 'M' key
   useEffect(() => {
@@ -224,6 +246,11 @@ export default function GameScene({
             <p className="text-sm">FOCUS MODE</p>
             <p className="text-xs opacity-80">Aim your controller toward the target</p>
             <p className="text-[10px] opacity-60">Press the fire button on the controller</p>
+            {aimAlignment && (
+              <p className="text-[10px] opacity-80">
+                Aim offset: {aimAlignment.diff.toFixed(1)}°
+              </p>
+            )}
           </div>
         </div>
       )}

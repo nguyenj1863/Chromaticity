@@ -131,25 +131,38 @@ export default function PlayerCharacter({
       }
     }
     
-    // Handle IMU-based horizontal movement with shake detection
+    // Handle IMU-based horizontal movement with walking speed fallback to shake
     if (imuData || forceMove) {
-      const isShaking = forceMove ? true : imuData ? shakeDetectorRef.detectShake(imuData) : false;
-      const CONSTANT_SPEED = 2.5;
-      
-      if (isShaking) {
-        // Smoothly transition to target velocity (negative Z = forward in rotated level)
+      const walkingSpeed = imuData?.walking_speed;
+      const walkProvided = typeof walkingSpeed === "number";
+      const targetSpeed = walkProvided
+        ? -THREE.MathUtils.clamp(walkingSpeed ?? 0, 0, 1) * 5
+        : forceMove
+        ? -3
+        : 0;
+
+      if (walkProvided || forceMove) {
         const smoothing = 0.9;
-        velocity.z = velocity.z * smoothing + (-CONSTANT_SPEED) * (1 - smoothing);
+        velocity.z = velocity.z * smoothing + targetSpeed * (1 - smoothing);
+      } else if (imuData) {
+        const isShaking = shakeDetectorRef.detectShake(imuData);
+        const CONSTANT_SPEED = -2.5;
+        if (isShaking) {
+          const smoothing = 0.9;
+          velocity.z = velocity.z * smoothing + CONSTANT_SPEED * (1 - smoothing);
+        } else {
+          const deceleration = 0.85;
+          velocity.z *= deceleration;
+          if (Math.abs(velocity.z) < 0.05) {
+            velocity.z = 0;
+          }
+        }
       } else {
-        // Decelerate
         const deceleration = 0.85;
         velocity.z *= deceleration;
-        if (Math.abs(velocity.z) < 0.05) {
-          velocity.z = 0;
-        }
+        if (Math.abs(velocity.z) < 0.05) velocity.z = 0;
       }
-      
-      // Always center on X axis (no sideways movement)
+
       velocity.x = 0;
     }
     
