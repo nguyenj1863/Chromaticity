@@ -22,6 +22,7 @@ interface GameSceneProps {
   levelData?: LevelData | null;
   onLevelDataChange?: (data: LevelData) => void;
   onPlayerDeath?: () => void;
+  forceJump?: boolean;
 }
 
 // Component to set camera to look at character from the side and follow it
@@ -90,6 +91,7 @@ export default function GameScene({
   levelData: controlledLevelData,
   onLevelDataChange,
   onPlayerDeath,
+  forceJump = false,
 }: GameSceneProps) {
   const [characterZ, setCharacterZ] = useState(0);
   const [characterY, setCharacterY] = useState(0.6);
@@ -306,6 +308,7 @@ export default function GameScene({
             respawnRequest={respawnRequest}
             onRespawnHandled={handleRespawnHandled}
             levelData={levelData}
+            forceJump={forceJump}
           />
         )}
       </Canvas>

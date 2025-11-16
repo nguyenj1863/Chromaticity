@@ -29,13 +29,51 @@ export class ShakeDetector {
     };
   }
 
+  private normalizeAcceleration(accel?: IMUData["accel_g"]): [number, number, number] | null {
+    if (!accel) {
+      return null;
+    }
+
+    let normalized: number[] | null = null;
+    if (Array.isArray(accel)) {
+      normalized = accel.slice(0, 3);
+    } else if (ArrayBuffer.isView(accel)) {
+      normalized = Array.from(accel as ArrayLike<number>).slice(0, 3);
+    } else if (typeof accel === "object" && accel !== null) {
+      const anyAccel = accel as Record<number, unknown>;
+      normalized = [anyAccel[0], anyAccel[1], anyAccel[2]].map((value) =>
+        typeof value === "number" ? value : Number.NaN
+      );
+    }
+
+    if (!normalized || normalized.length !== 3) {
+      return null;
+    }
+
+    if (normalized.some((value) => typeof value !== "number" || Number.isNaN(value))) {
+      return null;
+    }
+
+    return [normalized[0], normalized[1], normalized[2]];
+  }
+
   /**
    * Detect if controller is being shaken based on acceleration patterns
    * @param imuData Current IMU data
    * @returns true if controller is being shaken, false if held still
    */
   detectShake(imuData: IMUData): boolean {
-    const currentAccel = imuData.accel_g;
+    const currentAccel = this.normalizeAcceleration(imuData.accel_g);
+    if (!currentAccel) {
+      // Push a neutral sample so history continues to age out old entries
+      this.state.accelerationHistory.push([0, 0, 1]);
+      if (this.state.accelerationHistory.length > this.state.maxHistorySize) {
+        this.state.accelerationHistory.shift();
+      }
+      this.state.isShaking = false;
+      this.stillSampleCount = Math.min(this.stillSampleCount + 1, this.STILL_SAMPLES_REQUIRED);
+      return false;
+    }
     
     // Add current acceleration to history
     this.state.accelerationHistory.push([...currentAccel]);
@@ -236,7 +274,10 @@ export class ShakeDetector {
    * Check if controller is held still (within tolerance)
    */
   isStill(imuData: IMUData): boolean {
-    const accel = imuData.accel_g;
+    const accel = this.normalizeAcceleration(imuData.accel_g);
+    if (!accel) {
+      return true;
+    }
     // Filter gravity from Z-axis
     const zFiltered = Math.abs(accel[2] - 1.0);
     const horizontalMagnitude = Math.sqrt(accel[0] ** 2 + zFiltered ** 2);
@@ -253,7 +294,11 @@ export class ShakeDetector {
     }
 
     // Only use Z-axis (forward/backward)
-    const forwardAccel = imuData.accel_g[2]; // Z-axis
+    const accel = this.normalizeAcceleration(imuData.accel_g);
+    if (!accel) {
+      return 0;
+    }
+    const forwardAccel = accel[2]; // Z-axis
 
     // Only allow forward movement (positive Z)
     // Filter out backward movement and small noise

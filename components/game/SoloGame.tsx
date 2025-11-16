@@ -51,6 +51,25 @@ const TEXT_PREFETCH_COUNT: Record<MotivationEventType, number> = {
   game_complete: 2,
 };
 
+const SKELETON_CONNECTIONS: Array<[string, string]> = [
+  ["left_shoulder", "right_shoulder"],
+  ["left_shoulder", "left_elbow"],
+  ["left_elbow", "left_wrist"],
+  ["right_shoulder", "right_elbow"],
+  ["right_elbow", "right_wrist"],
+  ["left_shoulder", "left_hip"],
+  ["right_shoulder", "right_hip"],
+  ["left_hip", "right_hip"],
+  ["left_hip", "left_knee"],
+  ["left_knee", "left_ankle"],
+  ["right_hip", "right_knee"],
+  ["right_knee", "right_ankle"],
+  ["nose", "left_eye"],
+  ["nose", "right_eye"],
+  ["left_eye", "left_ear"],
+  ["right_eye", "right_ear"],
+];
+
 export default function SoloGame({ onClose }: SoloGameProps) {
   const router = useRouter();
   const {
@@ -63,6 +82,7 @@ export default function SoloGame({ onClose }: SoloGameProps) {
     player2,
   } = useStore();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const poseCanvasRef = useRef<HTMLCanvasElement>(null);
   const [poseState, setPoseState] = useState<PoseState>("unknown");
   const [isInitialized, setIsInitialized] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -85,7 +105,8 @@ export default function SoloGame({ onClose }: SoloGameProps) {
   const crystalMessageTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const coachLineTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastCalorieSampleRef = useRef<number | null>(null);
-  const controllerCharacteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
+  const controllerNotifyCharacteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
+  const controllerWriteCharacteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
   const lastCalorieSyncRef = useRef<number>(0);
   const sessionIdRef = useRef<string>("");
   const coachProcessingRef = useRef(false);
@@ -108,6 +129,9 @@ export default function SoloGame({ onClose }: SoloGameProps) {
     game_complete: [],
   });
   const textPrefetchInitRef = useRef(false);
+  const showLoadingScreen = isLoading || !introVoiceReady;
+  const [keyboardJump, setKeyboardJump] = useState(false);
+  const keyboardJumpTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   if (!sessionIdRef.current) {
     sessionIdRef.current =
       typeof crypto !== "undefined" && crypto.randomUUID
@@ -159,30 +183,59 @@ export default function SoloGame({ onClose }: SoloGameProps) {
       setCoachStatus("idle");
     }, 4500);
   }, []);
+  const buildOfflineMessage = useCallback((type: MotivationEventType, context?: Record<string, any>) => {
+    const player = context?.player ?? "Crodie";
+    const calories = context?.calories ?? context?.caloriesBurned ?? "these calories";
+    switch (type) {
+      case "game_start":
+        return `No AI on deck right now, ${player}—you already know the mission, grab those crystals.`;
+      case "crystal_collect":
+        return `Manual hype: crystal secured, ${player}, keep cooking.`;
+      case "player_death":
+        return `Offline coach here—yeah that fall was dusty, shake it off fam.`;
+      case "calorie_milestone":
+        return `Quota mode: ${player}, you’re already burning ${calories}. Stay moving.`;
+      case "game_complete":
+        return `Hard carry by you, ${player}. World saved even without the AI bars.`;
+      default:
+        return `Keep it pushing, ${player}.`;
+    }
+  }, []);
+
   const fetchMotivationText = useCallback(
     async (type: MotivationEventType, context?: Record<string, any>) => {
       if (!type) {
         throw new Error("Missing motivation event type.");
       }
-      const response = await fetch("/api/motivation/text", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          eventType: type,
-          context,
-        }),
-      });
+      let response: Response | null = null;
+      try {
+        response = await fetch("/api/motivation/text", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            eventType: type,
+            context,
+          }),
+        });
+      } catch (networkErr) {
+        console.error("Motivation text fetch failed:", networkErr);
+        return buildOfflineMessage(type, context);
+      }
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || "Failed to fetch motivation text.");
+        console.warn(
+          "Motivation text request failed, using offline copy:",
+          data?.error ?? response.statusText
+        );
+        return buildOfflineMessage(type, context);
       }
       const sanitizedMessage = (data.message || "").replace(/\s+/g, " ").trim();
       if (!sanitizedMessage) {
-        throw new Error("Motivation text was empty.");
+        return buildOfflineMessage(type, context);
       }
       return sanitizedMessage;
     },
-    []
+    [buildOfflineMessage]
   );
   const fetchMotivationPayload = useCallback(
     async (
@@ -190,24 +243,117 @@ export default function SoloGame({ onClose }: SoloGameProps) {
       context?: Record<string, any>,
       options?: { presetMessage?: string }
     ) => {
-      const response = await fetch("/api/motivation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          eventType: type,
-          context,
-          presetMessage: options?.presetMessage,
-        }),
-      });
+      let response: Response | null = null;
+      try {
+        response = await fetch("/api/motivation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            eventType: type,
+            context,
+            presetMessage: options?.presetMessage,
+          }),
+        });
+      } catch (networkErr) {
+        console.error("Motivation payload fetch failed:", networkErr);
+        const fallback = buildOfflineMessage(type, context);
+        return { message: fallback, audioBase64: null };
+      }
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || "Failed to fetch motivation message.");
+        console.warn(
+          "Motivation payload request failed, using offline message:",
+          data?.error ?? response.statusText
+        );
+        const fallback = buildOfflineMessage(type, context);
+        return { message: fallback, audioBase64: null };
       }
       const sanitizedMessage = (data.message || "").replace(/\s+/g, " ").trim();
       return {
-        message: sanitizedMessage || "Keep pushing forward!",
+        message: sanitizedMessage || buildOfflineMessage(type, context),
         audioBase64: data.audioBase64 || null,
       };
+    },
+    [buildOfflineMessage]
+  );
+
+  const drawPoseOnCanvas = useCallback(
+    (pose: poseDetection.Pose | null) => {
+      const canvas = poseCanvasRef.current;
+      const video = videoRef.current;
+      if (!canvas || !video) {
+        return;
+      }
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        return;
+      }
+
+      const width = video.videoWidth || video.clientWidth || 0;
+      const height = video.videoHeight || video.clientHeight || 0;
+      if (width === 0 || height === 0) {
+        ctx.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
+        return;
+      }
+
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+
+      ctx.clearRect(0, 0, width, height);
+      if (!pose) {
+        return;
+      }
+
+      const minScore = 0.35;
+      const keypoints = pose.keypoints.filter(
+        (kp) =>
+          kp.score !== undefined &&
+          kp.score >= minScore &&
+          typeof kp.x === "number" &&
+          typeof kp.y === "number" &&
+          kp.name
+      );
+
+      if (keypoints.length === 0) {
+        return;
+      }
+
+      const keypointMap = keypoints.reduce<Record<string, poseDetection.Keypoint>>((map, kp) => {
+        if (kp.name) {
+          map[kp.name] = kp;
+        }
+        return map;
+      }, {});
+
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(90, 255, 226, 0.85)";
+      ctx.lineCap = "round";
+
+      SKELETON_CONNECTIONS.forEach(([a, b]) => {
+        const kp1 = keypointMap[a];
+        const kp2 = keypointMap[b];
+        if (kp1 && kp2 && kp1.x !== undefined && kp2.x !== undefined && kp1.y !== undefined && kp2.y !== undefined) {
+          ctx.beginPath();
+          ctx.moveTo(kp1.x, kp1.y);
+          ctx.lineTo(kp2.x, kp2.y);
+          ctx.stroke();
+        }
+      });
+
+      ctx.fillStyle = "#FFFFFF";
+      ctx.strokeStyle = "#0F172A";
+      ctx.lineWidth = 1.5;
+
+      keypoints.forEach((kp) => {
+        if (kp.x === undefined || kp.y === undefined) return;
+        ctx.beginPath();
+        ctx.arc(kp.x, kp.y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      });
     },
     []
   );
@@ -703,9 +849,9 @@ export default function SoloGame({ onClose }: SoloGameProps) {
     const nextTotal = caloriesBurned + deltaCalories;
     setCaloriesBurned(nextTotal);
 
-    const characteristic = controllerCharacteristicRef.current;
+    const characteristic = controllerWriteCharacteristicRef.current;
     if (characteristic && typeof (characteristic as any).writeValue === "function") {
-      const payload = JSON.stringify({ calorie: Number(nextTotal.toFixed(1)) });
+      const payload = JSON.stringify({ calorie: Number(nextTotal.toFixed(2)) });
       try {
         const encoder = new TextEncoder();
         (characteristic as any).writeValue(encoder.encode(payload));
@@ -764,6 +910,7 @@ export default function SoloGame({ onClose }: SoloGameProps) {
   const baselineBodyHeightRef = useRef<number | null>(null);
   const calibrationFramesRef = useRef<number>(0);
   const isCalibratedRef = useRef<boolean>(false);
+  const baselineHipYRef = useRef<number | null>(null);
   const initRef = useRef(false); // Prevent multiple initializations
   const streamUsedRef = useRef(false); // Track if we've used the existing stream
   const streamRef = useRef<MediaStream | null>(null); // Keep reference to stream
@@ -777,28 +924,89 @@ export default function SoloGame({ onClose }: SoloGameProps) {
     }
   }, []); // Only run once on mount
 
+  useEffect(() => {
+    const isEditableTarget = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return false;
+      const tag = target.tagName;
+      return (
+        target.isContentEditable ||
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        (tag === "BUTTON" && (target as HTMLButtonElement).type === "submit")
+      );
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== "Space" || isEditableTarget(event)) {
+        return;
+      }
+      if (event.repeat) {
+        event.preventDefault();
+        return;
+      }
+      event.preventDefault();
+      setKeyboardJump(true);
+      if (keyboardJumpTimeoutRef.current) {
+        clearTimeout(keyboardJumpTimeoutRef.current);
+      }
+      keyboardJumpTimeoutRef.current = setTimeout(() => {
+        setKeyboardJump(false);
+        keyboardJumpTimeoutRef.current = null;
+      }, 250);
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.code !== "Space") {
+        return;
+      }
+      if (keyboardJumpTimeoutRef.current) {
+        clearTimeout(keyboardJumpTimeoutRef.current);
+        keyboardJumpTimeoutRef.current = null;
+      }
+      setKeyboardJump(false);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      if (keyboardJumpTimeoutRef.current) {
+        clearTimeout(keyboardJumpTimeoutRef.current);
+        keyboardJumpTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
   // Transfer stream to visible video element when switching from loading to game view
   useEffect(() => {
-    if (!isLoading && isInitialized && streamRef.current) {
-      // Wait a bit for the visible video element to be rendered
-      const transferStream = () => {
-        if (videoRef.current && streamRef.current) {
-          // Check if the visible video element doesn't have the stream yet
-          if (videoRef.current.srcObject !== streamRef.current) {
-            videoRef.current.srcObject = streamRef.current;
-            videoRef.current.play().catch(err => {
-              console.error("Error playing video after transfer:", err);
-            });
-          }
-        }
-      };
-      
-      // Try immediately, then retry after a short delay if needed
-      transferStream();
-      setTimeout(() => transferStream(), 100);
-      setTimeout(() => transferStream(), 300);
+    if (showLoadingScreen || !isInitialized || !streamRef.current) {
+      return;
     }
-  }, [isLoading, isInitialized]);
+
+    const transferStream = () => {
+      if (videoRef.current && streamRef.current) {
+        if (videoRef.current.srcObject !== streamRef.current) {
+          videoRef.current.srcObject = streamRef.current;
+        }
+        videoRef.current
+          ?.play()
+          .catch((err) => console.error("Error playing video after transfer:", err));
+      }
+    };
+
+    transferStream();
+    const retryHandles = [
+      setTimeout(() => transferStream(), 100),
+      setTimeout(() => transferStream(), 300),
+    ];
+
+    return () => {
+      retryHandles.forEach((handle) => clearTimeout(handle));
+    };
+  }, [showLoadingScreen, isInitialized]);
 
   // Initialize camera and TensorFlow
   useEffect(() => {
@@ -1157,14 +1365,38 @@ export default function SoloGame({ onClose }: SoloGameProps) {
       return "standing";
     }
 
+    const scoredPoints = keypoints.filter(
+      (kp) => kp.score !== undefined && kp.score > 0.3 && typeof kp.y === "number"
+    );
+    if (scoredPoints.length === 0) {
+      return "standing";
+    }
+
+    const yValues = scoredPoints.map((kp) => kp.y);
+    const yMin = Math.min(...yValues);
+    const yMax = Math.max(...yValues);
+    const yRange = Math.max(40, yMax - yMin);
+    const normalizeY = (value: number) => (value - yMin) / yRange;
+
     const shoulderY = (leftShoulder.y + rightShoulder.y) / 2;
     const hipY = (leftHip.y + rightHip.y) / 2;
     const headY = nose.y;
-    const bodyHeight = Math.abs(headY - hipY);
-    if (bodyHeight < 30) return "standing";
+    const bodyHeightPx = Math.abs(headY - hipY);
+    if (bodyHeightPx < 20) return "standing";
 
-    const hipShoulderDiff = hipY - shoulderY;
-    const hipShoulderRatio = hipShoulderDiff / bodyHeight;
+    const normalizedHipY = normalizeY(hipY);
+    const normalizedShoulderY = normalizeY(shoulderY);
+    const normalizedHeadY = normalizeY(headY);
+    const normalizedBodyHeight = Math.max(0.2, Math.abs(normalizedHeadY - normalizedHipY));
+
+    const currentHipY = normalizedHipY;
+    const finalize = (state: PoseState): PoseState => {
+      previousYPositionRef.current = currentHipY;
+      return state;
+    };
+
+    const hipShoulderDiff = normalizedHipY - normalizedShoulderY;
+    const hipShoulderRatio = hipShoulderDiff / normalizedBodyHeight;
 
     if (!isCalibratedRef.current) {
       calibrationFramesRef.current++;
@@ -1176,106 +1408,129 @@ export default function SoloGame({ onClose }: SoloGameProps) {
             (baselineHipShoulderRatioRef.current * (calibrationFramesRef.current - 1) + hipShoulderRatio) /
             calibrationFramesRef.current;
         }
-        baselineBodyHeightRef.current = bodyHeight;
-        return "standing";
+        if (baselineHipYRef.current === null) {
+          baselineHipYRef.current = normalizedHipY;
+        } else {
+          baselineHipYRef.current =
+            (baselineHipYRef.current * (calibrationFramesRef.current - 1) + normalizedHipY) / calibrationFramesRef.current;
+        }
+        if (baselineBodyHeightRef.current === null) {
+          baselineBodyHeightRef.current = normalizedBodyHeight;
+        } else {
+          baselineBodyHeightRef.current =
+            (baselineBodyHeightRef.current * (calibrationFramesRef.current - 1) + normalizedBodyHeight) /
+            calibrationFramesRef.current;
+        }
+        return finalize("standing");
       } else {
         isCalibratedRef.current = true;
       }
     }
 
-    const baselineRatio = baselineHipShoulderRatioRef.current || 0.35;
-    const baselineBodyHeight = baselineBodyHeightRef.current || bodyHeight;
-    const previousHipY = previousYPositionRef.current;
-    const currentHipY = hipY;
-
-    // Jump detection uses relative hip movement and velocity
-    if (previousHipY !== null) {
-      const deltaY = currentHipY - previousHipY;
-      const deltaYPercent = (deltaY / bodyHeight) * 100;
-      velocityRef.current = deltaYPercent * 0.3 + velocityRef.current * 0.7;
-
-      if (jumpStateRef.current === "none") {
-        const ratioDiff = hipShoulderRatio - baselineRatio;
-        const hipVelocityThreshold = -4;
-        const hipDisplacementThreshold = bodyHeight * 0.03;
-
-        if (velocityRef.current < hipVelocityThreshold && currentHipY < previousHipY - hipDisplacementThreshold) {
-          const bodyHeightChange = bodyHeight - baselineBodyHeight;
-          const bodyHeightIncrease = bodyHeightChange / baselineBodyHeight;
-          if (bodyHeightIncrease < 0.1 && Math.abs(velocityRef.current) > 4) {
-            jumpStateRef.current = "going_up";
-            jumpPeakYRef.current = currentHipY;
-            jumpFramesRef.current = 0;
-            return "jumping";
-          }
-        }
-      } else if (jumpStateRef.current === "going_up") {
-        jumpFramesRef.current++;
-        if (currentHipY < jumpPeakYRef.current!) {
-          jumpPeakYRef.current = currentHipY;
-          jumpFramesRef.current = 0;
-          return "jumping";
-        } else if (currentHipY >= jumpPeakYRef.current! + bodyHeight * 0.015) {
-          jumpStateRef.current = "coming_down";
-          jumpFramesRef.current = 0;
-          return "jumping";
-        } else if (jumpFramesRef.current > 20) {
-          jumpStateRef.current = "none";
-          jumpPeakYRef.current = null;
-          jumpFramesRef.current = 0;
-        } else {
-          return "jumping";
-        }
-      } else if (jumpStateRef.current === "coming_down") {
-        if (currentHipY >= previousHipY + bodyHeight * 0.01) {
-          return "jumping";
-        } else {
-          jumpStateRef.current = "none";
-          jumpPeakYRef.current = null;
-          jumpFramesRef.current = 0;
-        }
-      }
+    if (baselineHipYRef.current === null) {
+      baselineHipYRef.current = currentHipY;
     }
 
-    previousYPositionRef.current = currentHipY;
-    return "standing";
+    const referenceBodyHeight = baselineBodyHeightRef.current || normalizedBodyHeight;
+    const baselineHipY = baselineHipYRef.current ?? currentHipY;
+    const normalizedHipRise = (baselineHipY - currentHipY) / Math.max(referenceBodyHeight, 0.05);
+    const previousHipY = previousYPositionRef.current;
+    const rawVelocity = previousHipY !== null ? previousHipY - currentHipY : 0;
+    velocityRef.current = velocityRef.current * 0.6 + rawVelocity * 0.4;
+
+    if (jumpStateRef.current === "none" && Math.abs(normalizedHipRise) < 0.04) {
+      baselineHipYRef.current = baselineHipY * 0.9 + currentHipY * 0.1;
+    }
+
+    const riseThreshold = 0.06;
+    const settleThreshold = 0.02;
+    const upwardVelocityThreshold = 0.012;
+    const descentTimeout = 35;
+
+    if (jumpStateRef.current === "none") {
+      if (normalizedHipRise > riseThreshold && velocityRef.current > upwardVelocityThreshold) {
+        jumpStateRef.current = "going_up";
+        jumpPeakYRef.current = currentHipY;
+        jumpFramesRef.current = 0;
+        return finalize("jumping");
+      }
+    } else if (jumpStateRef.current === "going_up") {
+      jumpFramesRef.current++;
+      if (jumpPeakYRef.current === null || currentHipY < jumpPeakYRef.current) {
+        jumpPeakYRef.current = currentHipY;
+      }
+
+      const dropFromPeak =
+        jumpPeakYRef.current === null ? 0 : (currentHipY - jumpPeakYRef.current) / Math.max(referenceBodyHeight, 0.05);
+
+      if (dropFromPeak > 0.02 || velocityRef.current < -0.008) {
+        jumpStateRef.current = "coming_down";
+        jumpFramesRef.current = 0;
+      }
+      return finalize("jumping");
+    } else if (jumpStateRef.current === "coming_down") {
+      jumpFramesRef.current++;
+      const closeToBaseline = Math.abs(normalizedHipRise) < settleThreshold;
+      const almostStill = Math.abs(velocityRef.current) < 0.006;
+
+      if ((closeToBaseline && almostStill) || jumpFramesRef.current > descentTimeout) {
+        jumpStateRef.current = "none";
+        jumpPeakYRef.current = null;
+        jumpFramesRef.current = 0;
+        baselineHipYRef.current = baselineHipY * 0.9 + currentHipY * 0.1;
+        return finalize("standing");
+      }
+
+      return finalize("jumping");
+    }
+
+    return finalize("standing");
   };
 
   // Main pose detection loop
   useEffect(() => {
-    if (!isInitialized || !videoRef.current) {
+    if (!isInitialized) {
       return;
     }
 
-    const video = videoRef.current;
-
     const detect = async () => {
+      const video = videoRef.current;
+      if (!video) {
+        animationFrameRef.current = requestAnimationFrame(detect);
+        return;
+      }
+
       const currentStream = video.srcObject as MediaStream | null;
       if (currentStream) {
         const isActive = currentStream.active;
-        const activeTracks = currentStream.getTracks().filter(t => t.readyState === "live");
+        const activeTracks = currentStream.getTracks().filter((t) => t.readyState === "live");
         if (!isActive || activeTracks.length === 0) {
           console.error("Stream became inactive during pose detection");
         }
       }
 
       if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        const poses = await detectPose(video);
-        const state = detectPoseState(poses);
-        setPoseState(state);
+        try {
+          const poses = await detectPose(video);
+          const state = detectPoseState(poses);
+          setPoseState(state);
+          drawPoseOnCanvas(poses[0] ?? null);
+        } catch (poseError) {
+          console.error("Pose detection error:", poseError);
+        }
       }
 
       animationFrameRef.current = requestAnimationFrame(detect);
     };
-    
+
     detect();
-    
+
     return () => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [isInitialized]);
+  }, [isInitialized, drawPoseOnCanvas, showLoadingScreen]);
   
   // Monitor stream state changes
   useEffect(() => {
@@ -1307,19 +1562,20 @@ export default function SoloGame({ onClose }: SoloGameProps) {
   // Set up real controller IMU data reception when game is ready
   useEffect(() => {
     if (isInitialized && !isLoading && controllerConnection) {
-      let characteristic: any = null;
+      const SERVICE_UUID = "12345678-1234-1234-1234-1234567890ab";
+      const CHAR_RX_UUID = "12345678-1234-1234-1234-1234567890ad";
+      let notifyCharacteristic: BluetoothRemoteGATTCharacteristic | null = null;
+      let writeCharacteristic: BluetoothRemoteGATTCharacteristic | null = null;
       let notificationInterval: NodeJS.Timeout | null = null;
-      
+
       const setupController = async () => {
         try {
-          // Verify server is still connected
           if (!controllerConnection.server?.connected) {
             console.error("GATT server is not connected!");
             return;
           }
-          
-          // Always set up notifications fresh to ensure listener is active
-          characteristic = await setupIMUNotifications(
+
+          notifyCharacteristic = await setupIMUNotifications(
             controllerConnection.server,
             (data) => {
               setImuData(data);
@@ -1328,49 +1584,59 @@ export default function SoloGame({ onClose }: SoloGameProps) {
               setFireToken(timestamp || Date.now());
             }
           );
-          
-          if (characteristic) {
-            // Update store with characteristic
+
+          if (notifyCharacteristic) {
             useStore.getState().setControllerConnection({
               ...controllerConnection,
-              characteristic,
+              characteristic: notifyCharacteristic,
             });
-            controllerCharacteristicRef.current = characteristic;
+            controllerNotifyCharacteristicRef.current = notifyCharacteristic;
           }
-          
-          // Set up periodic check to verify connection is alive
-          if (characteristic) {
+
+          try {
+            const service = await controllerConnection.server.getPrimaryService(SERVICE_UUID);
+            const rxCharacteristic = await service.getCharacteristic(CHAR_RX_UUID);
+            if (rxCharacteristic) {
+              controllerWriteCharacteristicRef.current = rxCharacteristic;
+              writeCharacteristic = rxCharacteristic;
+            }
+          } catch (rxError) {
+            console.error("Failed to access controller RX characteristic:", rxError);
+          }
+
+          if (notifyCharacteristic) {
             notificationInterval = setInterval(() => {
               if (!controllerConnection.server?.connected) {
                 console.error("GATT server disconnected!");
                 clearInterval(notificationInterval!);
               }
-            }, 5000); // Check every 5 seconds
+            }, 5000);
           }
         } catch (error) {
           console.error("Error setting up controller IMU:", error);
         }
       };
-      
+
       setupController();
-      
+
       return () => {
-        // Cleanup: stop notifications and interval
         if (notificationInterval) {
           clearInterval(notificationInterval);
         }
-        if (characteristic) {
-          characteristic.stopNotifications().catch(console.error);
+        if (notifyCharacteristic) {
+          notifyCharacteristic.stopNotifications().catch(console.error);
+          if (controllerNotifyCharacteristicRef.current === notifyCharacteristic) {
+            controllerNotifyCharacteristicRef.current = null;
+          }
         }
-        if (controllerCharacteristicRef.current === characteristic) {
-          controllerCharacteristicRef.current = null;
+        if (writeCharacteristic && controllerWriteCharacteristicRef.current === writeCharacteristic) {
+          controllerWriteCharacteristicRef.current = null;
         }
       };
     }
   }, [isInitialized, isLoading, controllerConnection]);
 
   // Loading screen - but render video element and game scene in background so they're available for initialization
-  const showLoadingScreen = isLoading || !introVoiceReady;
   if (showLoadingScreen) {
     const waitingForVoice = !introVoiceReady;
     return (
@@ -1397,6 +1663,7 @@ export default function SoloGame({ onClose }: SoloGameProps) {
               levelReadyRef.current = true;
               setLevelReady(true);
             }}
+            forceJump={keyboardJump}
           />
         </div>
         
@@ -1569,6 +1836,7 @@ export default function SoloGame({ onClose }: SoloGameProps) {
           levelData={levelData}
           onLevelDataChange={setLevelData}
           onPlayerDeath={handlePlayerDeath}
+          forceJump={keyboardJump}
         />
       </div>
 
@@ -1658,10 +1926,14 @@ export default function SoloGame({ onClose }: SoloGameProps) {
         <div className="relative w-full h-full">
           <video
             ref={videoRef}
-            className="w-full h-full object-contain"
+            className="w-full h-full object-cover"
             playsInline
             muted
             autoPlay
+          />
+          <canvas
+            ref={poseCanvasRef}
+            className="absolute inset-0 w-full h-full pointer-events-none"
           />
         </div>
       </div>
